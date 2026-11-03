@@ -45,6 +45,7 @@ export interface BookRecord {
   progressPct: number;
   addedAt: string;
   lastOpenedAt?: string | null;
+  isTemporary?: boolean;
 }
 
 export interface ReadingProgress {

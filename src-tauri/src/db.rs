@@ -180,6 +180,12 @@ impl DatabaseManager {
             );
 
             CREATE INDEX IF NOT EXISTS idx_bookmarks_book_id ON bookmarks(book_id);
+
+            CREATE TABLE IF NOT EXISTS word_cache (
+                word TEXT PRIMARY KEY,
+                payload_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             ",
         )?;
 
@@ -521,6 +527,37 @@ impl DatabaseManager {
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(DbError::from)
+    }
+
+    pub fn get_cached_word_definition(&self, word: &str) -> Result<Option<String>, DbError> {
+        let key = word.trim().to_lowercase();
+        let conn = self.conn.lock().map_err(|_| DbError::LockError)?;
+        conn.query_row(
+            "SELECT payload_json FROM word_cache WHERE word = ?1",
+            params![key],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(DbError::from)
+    }
+
+    pub fn save_cached_word_definition(
+        &self,
+        word: &str,
+        payload_json: &str,
+    ) -> Result<(), DbError> {
+        let key = word.trim().to_lowercase();
+        let now = Utc::now().to_rfc3339();
+        let conn = self.conn.lock().map_err(|_| DbError::LockError)?;
+        conn.execute(
+            "INSERT INTO word_cache (word, payload_json, updated_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(word) DO UPDATE SET
+                payload_json = excluded.payload_json,
+                updated_at = excluded.updated_at",
+            params![key, payload_json, now],
+        )?;
+        Ok(())
     }
 
     pub fn create_atomic_snapshot(&self, snapshot_path: &Path) -> Result<(), DbError> {

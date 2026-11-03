@@ -13,14 +13,17 @@ import {
  * a document's reading progress, highlights (EPUB CFI / PDF bounding boxes),
  * and bookmarks in local SQLite.
  */
-export function useDocumentAnnotations(bookId: string | null) {
+export function useDocumentAnnotations(
+  bookId: string | null,
+  isTemporary: boolean = false
+) {
   const [progress, setProgress] = useState<ReadingProgress | null>(null);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
 
   const reloadDocumentState = useCallback(async () => {
-    if (!bookId) {
+    if (!bookId || isTemporary) {
       setProgress(null);
       setAnnotations([]);
       setBookmarks([]);
@@ -41,7 +44,7 @@ export function useDocumentAnnotations(bookId: string | null) {
     } finally {
       setIsLoading(false);
     }
-  }, [bookId]);
+  }, [bookId, isTemporary]);
 
   useEffect(() => {
     reloadDocumentState();
@@ -58,9 +61,11 @@ export function useDocumentAnnotations(bookId: string | null) {
         updatedAt: new Date().toISOString(),
       };
       setProgress(payload);
-      await invoke("save_reading_progress", { progress: payload });
+      if (!isTemporary) {
+        await invoke("save_reading_progress", { progress: payload });
+      }
     },
-    [bookId]
+    [bookId, isTemporary]
   );
 
   const saveHighlight = useCallback(
@@ -102,16 +107,23 @@ export function useDocumentAnnotations(bookId: string | null) {
         return [...prev, annotation];
       });
 
-      await invoke("save_annotation", { annotation });
+      if (!isTemporary) {
+        await invoke("save_annotation", { annotation });
+      }
       return annotation;
     },
-    [bookId]
+    [bookId, isTemporary]
   );
 
-  const removeHighlight = useCallback(async (annotationId: string) => {
-    setAnnotations((prev) => prev.filter((a) => a.id !== annotationId));
-    await invoke("delete_annotation", { annotationId });
-  }, []);
+  const removeHighlight = useCallback(
+    async (annotationId: string) => {
+      setAnnotations((prev) => prev.filter((a) => a.id !== annotationId));
+      if (!isTemporary) {
+        await invoke("delete_annotation", { annotationId });
+      }
+    },
+    [isTemporary]
+  );
 
   const toggleBookmark = useCallback(
     async (params: {
@@ -125,7 +137,9 @@ export function useDocumentAnnotations(bookId: string | null) {
       const existing = bookmarks.find((b) => b.locator === params.locator);
       if (existing && !params.note) {
         setBookmarks((prev) => prev.filter((b) => b.id !== existing.id));
-        await invoke("delete_bookmark", { bookmarkId: existing.id });
+        if (!isTemporary) {
+          await invoke("delete_bookmark", { bookmarkId: existing.id });
+        }
         return { added: false };
       }
 
@@ -144,16 +158,23 @@ export function useDocumentAnnotations(bookId: string | null) {
         return [bookmark, ...filtered];
       });
 
-      await invoke("save_bookmark", { bookmark });
+      if (!isTemporary) {
+        await invoke("save_bookmark", { bookmark });
+      }
       return { added: true, bookmark };
     },
-    [bookId, bookmarks]
+    [bookId, bookmarks, isTemporary]
   );
 
-  const removeBookmark = useCallback(async (bookmarkId: string) => {
-    setBookmarks((prev) => prev.filter((b) => b.id !== bookmarkId));
-    await invoke("delete_bookmark", { bookmarkId });
-  }, []);
+  const removeBookmark = useCallback(
+    async (bookmarkId: string) => {
+      setBookmarks((prev) => prev.filter((b) => b.id !== bookmarkId));
+      if (!isTemporary) {
+        await invoke("delete_bookmark", { bookmarkId });
+      }
+    },
+    [isTemporary]
+  );
 
   return {
     progress,

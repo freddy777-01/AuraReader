@@ -5,8 +5,10 @@ import { TextLayer } from "pdfjs-dist";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { THEME_PALETTES, useReader } from "../context/ReaderContext";
+import { DictionaryPopup, extractLookupWord } from "./DictionaryPopup";
 import {
   Annotation,
+  BookRecord,
   Bookmark,
   HighlightColor,
   MobiDocumentPayload,
@@ -40,22 +42,34 @@ export interface VirtualPageCard {
 function buildEpubContentStylesheet(mode: ThemeMode): string {
   const palette = THEME_PALETTES[mode];
   return `
+    *, *::before, *::after {
+      box-sizing: border-box !important;
+    }
     html, body {
       background-color: ${palette.bgCard} !important;
       color: ${palette.textPrimary} !important;
       font-family: 'Merriweather', Georgia, serif !important;
       line-height: 1.75 !important;
-      padding: 0 12px !important;
+      margin: 0 !important;
+      overflow-x: hidden !important;
+      overflow-wrap: break-word !important;
+      word-wrap: break-word !important;
       transition: background-color 150ms ease, color 150ms ease !important;
+    }
+    html::-webkit-scrollbar:horizontal,
+    body::-webkit-scrollbar:horizontal {
+      display: none !important;
+      height: 0 !important;
     }
     p, span, div, li, blockquote, dd, dt, h1, h2, h3, h4, h5, h6 {
       color: inherit !important;
       background-color: transparent !important;
+      max-width: 100% !important;
     }
     a, a:link, a:visited {
       color: ${palette.accent} !important;
     }
-    img, svg, video, canvas {
+    img, svg, video, canvas, table, pre {
       max-width: 100% !important;
       height: auto !important;
       filter: ${
@@ -90,11 +104,13 @@ function mapEpubNavItems(items: NavItem[]): TocEntry[] {
 interface ReaderWorkspaceProps {
   onBackToLibrary?: () => void;
   onOpenCloudSettings?: () => void;
+  onSavedToLibrary?: (savedBook?: BookRecord | null) => void;
 }
 
 export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
   onBackToLibrary,
   onOpenCloudSettings,
+  onSavedToLibrary,
 }) => {
   const {
     activeBook,
@@ -123,6 +139,7 @@ export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
     setPdfScale,
     setPdfSmartInvert,
     setIsDrawerOpen,
+    saveTemporaryBookToLibrary,
   } = useReader();
 
   const viewportScrollRef = useRef<HTMLElement | null>(null);
@@ -155,6 +172,17 @@ export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
   const [showBookmarkPopover, setShowBookmarkPopover] =
     useState<boolean>(false);
   const [showSettingsMenu, setShowSettingsMenu] = useState<boolean>(false);
+  const [showDictionaryPopup, setShowDictionaryPopup] =
+    useState<boolean>(false);
+
+  // Automatically open Dictionary Popup when a single word is highlighted/selected
+  useEffect(() => {
+    if (activeSelection && extractLookupWord(activeSelection.text)) {
+      setShowDictionaryPopup(true);
+    } else {
+      setShowDictionaryPopup(false);
+    }
+  }, [activeSelection]);
 
   const currentVirtualPageRef = useRef<number>(1);
   currentVirtualPageRef.current = currentVirtualPage;
@@ -975,6 +1003,15 @@ export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
               {activeBook.format}
             </span>
 
+            {activeBook.isTemporary && (
+              <span
+                title="Opened in temporary Quick-View mode — not saved in your Bookshelf Library"
+                className="shrink-0 rounded border border-[var(--border-color)] bg-[var(--bg-elevated)] px-2 py-0.5 text-[10px] font-medium text-[var(--text-secondary)]"
+              >
+                Quick View
+              </span>
+            )}
+
             <div className="min-w-0 flex-1">
               <h1
                 title={activeBook.title}
@@ -990,8 +1027,20 @@ export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
             </div>
           </div>
 
-          {/* Right: Bookmark, Contents/Pages/Notebook Drawer Toggle, & Unified Settings Menu */}
+          {/* Right: Save to Library (if Temporary), Bookmark, Contents/Pages/Notebook Drawer Toggle, & Unified Settings Menu */}
           <div className="flex shrink-0 items-center gap-1.5 whitespace-nowrap">
+            {activeBook.isTemporary && (
+              <button
+                onClick={async () => {
+                  const saved = await saveTemporaryBookToLibrary();
+                  onSavedToLibrary?.(saved);
+                }}
+                title="Save this document to your Bookshelf Library and persist reading progress & highlights"
+                className="flex shrink-0 items-center gap-1 rounded-lg bg-[var(--accent)] px-2.5 py-1 text-xs font-semibold text-slate-950 shadow-xs transition hover:bg-[var(--accent-hover)]"
+              >
+                <span>+ Save to Library</span>
+              </button>
+            )}
             {/* Quick-Toggle Bookmark Button + Optional Note Popover */}
             <div className="relative flex shrink-0 items-center">
               <button
@@ -1404,6 +1453,18 @@ export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
             </button>
 
             <button
+              title="Look up word definition in Dictionary"
+              onClick={() => setShowDictionaryPopup(!showDictionaryPopup)}
+              className={`rounded-lg border px-2 py-1 text-xs font-medium transition ${
+                showDictionaryPopup
+                  ? "border-[var(--accent)] bg-[var(--accent)]/15 text-[var(--accent)]"
+                  : "border-[var(--border-color)] bg-[var(--bg-elevated)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+              }`}
+            >
+              📖 Define
+            </button>
+
+            <button
               title="Copy selected text"
               onClick={() => {
                 navigator.clipboard?.writeText(activeSelection.text);
@@ -1421,6 +1482,15 @@ export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
               ✕
             </button>
           </div>
+        )}
+
+        {/* Floating Online/Offline SQLite Dictionary Definition Card */}
+        {activeSelection && showDictionaryPopup && (
+          <DictionaryPopup
+            selectedText={activeSelection.text}
+            anchorPosition={activeSelection.popoverPosition}
+            onClose={() => setShowDictionaryPopup(false)}
+          />
         )}
 
         {/* Document Reading Surface with Left/Right Edge Page-Turn Zones */}

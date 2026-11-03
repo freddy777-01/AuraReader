@@ -54,6 +54,8 @@ pub fn run() {
             commands::disconnect_onedrive,
             commands::trigger_onedrive_backup,
             commands::restore_onedrive_backup,
+            commands::get_cached_dictionary_word,
+            commands::save_cached_dictionary_word,
         ])
         .run(tauri::generate_context!())
         .expect("error while running AuraReader Tauri application");

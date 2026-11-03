@@ -428,3 +428,26 @@ pub async fn restore_onedrive_backup(
         .await
         .map_err(|e| e.to_string())
 }
+
+#[tauri::command]
+pub fn get_cached_dictionary_word(
+    word: String,
+    state: State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    state
+        .db
+        .get_cached_word_definition(&word)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn save_cached_dictionary_word(
+    word: String,
+    payload_json: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .db
+        .save_cached_word_definition(&word, &payload_json)
+        .map_err(|e| e.to_string())
+}

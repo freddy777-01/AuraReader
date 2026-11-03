@@ -63,3 +63,14 @@ body {
   cursor: text;
   transform-origin: 0% 0%;
 }
+
+/* Eliminate unwanted horizontal scrollbars inside EPUB.js containers */
+.epub-container {
+  overflow-x: hidden !important;
+}
+
+.epub-container::-webkit-scrollbar:horizontal,
+.epub-view::-webkit-scrollbar:horizontal {
+  display: none !important;
+  height: 0 !important;
+}

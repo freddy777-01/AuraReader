@@ -6,6 +6,7 @@ import React, {
   useMemo,
   useState,
 } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import {
   Annotation,
   BookRecord,
@@ -140,6 +141,7 @@ interface ReaderContextValue {
   setPdfSmartInvert: (enabled: boolean) => void;
   setIsDrawerOpen: (open: boolean) => void;
   refreshActiveBookState: () => Promise<void>;
+  saveTemporaryBookToLibrary: () => Promise<BookRecord | null>;
 }
 
 const ReaderContext = createContext<ReaderContextValue | undefined>(undefined);
@@ -183,7 +185,10 @@ export const ReaderProvider: React.FC<{ children: React.ReactNode }> = ({
     toggleBookmark,
     removeBookmark,
     reloadDocumentState,
-  } = useDocumentAnnotations(activeBook?.id ?? null);
+  } = useDocumentAnnotations(
+    activeBook?.id ?? null,
+    Boolean(activeBook?.isTemporary)
+  );
 
   const themePalette = THEME_PALETTES[themeMode];
 
@@ -224,6 +229,33 @@ export const ReaderProvider: React.FC<{ children: React.ReactNode }> = ({
     setActiveBook(null);
     setActiveSelection(null);
   }, []);
+
+  const saveTemporaryBookToLibrary = useCallback(async (): Promise<BookRecord | null> => {
+    if (!activeBook || !activeBook.isTemporary) return activeBook;
+    const savedBook = await invoke<BookRecord>("import_book_file", {
+      filePath: activeBook.filePath,
+    });
+
+    // Persist any progress, highlights, or bookmarks made during Quick-View
+    if (progress) {
+      await invoke("save_reading_progress", {
+        progress: { ...progress, bookId: savedBook.id },
+      });
+    }
+    for (const ann of annotations) {
+      await invoke("save_annotation", {
+        annotation: { ...ann, bookId: savedBook.id },
+      });
+    }
+    for (const bm of bookmarks) {
+      await invoke("save_bookmark", {
+        bookmark: { ...bm, bookId: savedBook.id },
+      });
+    }
+
+    setActiveBook({ ...savedBook, isTemporary: false });
+    return savedBook;
+  }, [activeBook, progress, annotations, bookmarks]);
 
   const createOrUpdateAnnotation = useCallback(
     async (
@@ -281,6 +313,7 @@ export const ReaderProvider: React.FC<{ children: React.ReactNode }> = ({
       setPdfSmartInvert,
       setIsDrawerOpen,
       refreshActiveBookState: reloadDocumentState,
+      saveTemporaryBookToLibrary,
     }),
     [
       activeBook,
@@ -304,6 +337,7 @@ export const ReaderProvider: React.FC<{ children: React.ReactNode }> = ({
       toggleBookmark,
       removeBookmark,
       reloadDocumentState,
+      saveTemporaryBookToLibrary,
     ]
   );
 
