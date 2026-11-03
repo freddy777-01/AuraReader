@@ -1,6 +1,7 @@
 pub mod cloud_sync;
 pub mod commands;
 pub mod db;
+pub mod mobi_engine;
 pub mod scanner;
 
 use cloud_sync::OneDriveSyncService;
@@ -30,6 +31,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_library_books,
             commands::import_book_file,
+            commands::load_mobi_book,
             commands::scan_local_library,
             commands::toggle_book_favorite,
             commands::update_book_tags,

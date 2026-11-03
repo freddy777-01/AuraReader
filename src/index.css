@@ -30,15 +30,15 @@
 
 [data-theme='dark'],
 .dark {
-  --bg-primary: #090a0f;
-  --bg-card: #10131d;
-  --bg-elevated: #161a29;
-  --border-color: #1e2438;
-  --text-primary: #f1f5f9;
+  --bg-primary: #141720;
+  --bg-card: #1b1f2b;
+  --bg-elevated: #232836;
+  --border-color: #2d3446;
+  --text-primary: #e2e8f0;
   --text-secondary: #94a3b8;
   --accent: #f59e0b;
   --accent-hover: #fbbf24;
-  --accent-glow: rgba(255, 183, 3, 0.4);
+  --accent-glow: rgba(245, 158, 11, 0.3);
 }
 
 body {

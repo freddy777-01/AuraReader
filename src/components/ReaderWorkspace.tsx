@@ -3,12 +3,13 @@ import ePub, { Book as EpubBook, NavItem, Rendition } from "epubjs";
 import * as pdfjsLib from "pdfjs-dist";
 import { TextLayer } from "pdfjs-dist";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { THEME_PALETTES, useReader } from "../context/ReaderContext";
 import {
   Annotation,
   Bookmark,
   HighlightColor,
+  MobiDocumentPayload,
   NormalizedRect,
   ThemeMode,
 } from "../types/reader";
@@ -144,13 +145,23 @@ export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
 
   const [tocEntries, setTocEntries] = useState<TocEntry[]>([]);
   const [virtualPages, setVirtualPages] = useState<VirtualPageCard[]>([]);
+  const [mobiPages, setMobiPages] = useState<string[]>([]);
 
   const [focusedItemId, setFocusedItemId] = useState<string | null>(null);
   const [noteDraft, setNoteDraft] = useState<string>("");
+  const [selectedHighlightColor, setSelectedHighlightColor] =
+    useState<HighlightColor>("amber");
   const [bookmarkNoteDraft, setBookmarkNoteDraft] = useState<string>("");
   const [showBookmarkPopover, setShowBookmarkPopover] =
     useState<boolean>(false);
   const [showSettingsMenu, setShowSettingsMenu] = useState<boolean>(false);
+
+  const currentVirtualPageRef = useRef<number>(1);
+  currentVirtualPageRef.current = currentVirtualPage;
+  const currentLocatorRef = useRef<string>("");
+  currentLocatorRef.current = currentLocator;
+  const annotationsRef = useRef<Annotation[]>(annotations);
+  annotationsRef.current = annotations;
 
   const [drawerTab, setDrawerTab] = useState<
     "toc" | "pages" | "highlights" | "bookmarks"
@@ -165,7 +176,7 @@ export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
     if (!progress || !activeBook) return;
     if (activeBook.format === "EPUB" && renditionRef.current) {
       renditionRef.current.display(progress.locator);
-    } else if (activeBook.format === "PDF") {
+    } else if (activeBook.format === "PDF" || activeBook.format === "MOBI") {
       const savedPage = resolveTargetPdfPage(
         progress.locator,
         progress.pdfPage
@@ -187,7 +198,10 @@ export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
     if (!activeBook) return;
     if (activeBook.format === "EPUB" && renditionRef.current) {
       renditionRef.current.prev();
-    } else if (activeBook.format === "PDF" && currentVirtualPage > 1) {
+    } else if (
+      (activeBook.format === "PDF" || activeBook.format === "MOBI") &&
+      currentVirtualPage > 1
+    ) {
       const prev = Math.max(1, currentVirtualPage - 1);
       setCurrentVirtualPage(prev);
       updateProgress(
@@ -203,7 +217,7 @@ export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
     if (activeBook.format === "EPUB" && renditionRef.current) {
       renditionRef.current.next();
     } else if (
-      activeBook.format === "PDF" &&
+      (activeBook.format === "PDF" || activeBook.format === "MOBI") &&
       currentVirtualPage < totalVirtualPages
     ) {
       const next = Math.min(totalVirtualPages, currentVirtualPage + 1);
@@ -225,7 +239,8 @@ export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
       );
       setCurrentVirtualPage(clamped);
 
-      if (activeBook.format === "PDF") {
+      if (activeBook.format === "PDF" || activeBook.format === "MOBI") {
+        setCurrentLocator(`page:${clamped}`);
         updateProgress(
           `page:${clamped}`,
           (clamped / Math.max(1, totalVirtualPages)) * 100,
@@ -279,6 +294,9 @@ export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
       if (activeBook.format === "EPUB" && renditionRef.current) {
         await renditionRef.current.display(ann.locator);
         setCurrentLocator(ann.locator);
+      } else if (activeBook.format === "MOBI") {
+        const targetPage = resolveTargetPdfPage(ann.locator, ann.pageNumber);
+        handleJumpToPageNumber(targetPage);
       } else if (activeBook.format === "PDF") {
         const targetPage = resolveTargetPdfPage(ann.locator, ann.pageNumber);
         let firstRectY: number | null = null;
@@ -325,6 +343,9 @@ export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
       if (activeBook.format === "EPUB" && renditionRef.current) {
         await renditionRef.current.display(bm.locator);
         setCurrentLocator(bm.locator);
+      } else if (activeBook.format === "MOBI") {
+        const targetPage = resolveTargetPdfPage(bm.locator, bm.pageNumber);
+        handleJumpToPageNumber(targetPage);
       } else if (activeBook.format === "PDF") {
         const targetPage = resolveTargetPdfPage(bm.locator, bm.pageNumber);
         pendingPdfScrollYRef.current = 0;
@@ -345,13 +366,66 @@ export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
       if (activeBook.format === "EPUB" && renditionRef.current) {
         renditionRef.current.display(entry.href);
         setCurrentChapterTitle(entry.label);
-      } else if (activeBook.format === "PDF" && entry.pageNumber) {
+      } else if (
+        (activeBook.format === "PDF" || activeBook.format === "MOBI") &&
+        entry.pageNumber
+      ) {
         handleJumpToPageNumber(entry.pageNumber);
         setCurrentChapterTitle(entry.label);
       }
     },
     [activeBook, handleJumpToPageNumber]
   );
+
+  // ==========================================================================
+  // 0. MOBI Engine: Decompress PalmDOC Records, Paginate & Extract TOC
+  // ==========================================================================
+  useEffect(() => {
+    if (!activeBook || activeBook.format !== "MOBI") {
+      setMobiPages([]);
+      return;
+    }
+
+    let isCancelled = false;
+    invoke<MobiDocumentPayload>("load_mobi_book", {
+      filePath: activeBook.filePath,
+    })
+      .then((payload) => {
+        if (isCancelled) return;
+        const pages = payload.pages.length > 0 ? payload.pages : [""];
+        setMobiPages(pages);
+        setTotalVirtualPages(pages.length);
+
+        const savedPage = progress
+          ? resolveTargetPdfPage(progress.locator, progress.pdfPage)
+          : 1;
+        const startPage = Math.min(Math.max(1, savedPage), pages.length);
+        setCurrentVirtualPage(startPage);
+        setCurrentLocator(`page:${startPage}`);
+
+        setVirtualPages(
+          pages.map((_, idx) => ({
+            pageNumber: idx + 1,
+            label: `Page ${idx + 1}`,
+            locator: `page:${idx + 1}`,
+          }))
+        );
+
+        setTocEntries(
+          payload.chapters.map((ch) => ({
+            id: `mobi-ch-${ch.index}`,
+            label: ch.title,
+            href: `page:${ch.startPage}`,
+            pageNumber: ch.startPage,
+          }))
+        );
+      })
+      .catch(console.error);
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [activeBook?.id]);
 
   // ==========================================================================
   // 1. EPUB.js Engine: TOC Extraction, Locations Generation, Flow & Spreads
@@ -380,6 +454,112 @@ export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
     });
     renditionRef.current = rendition;
 
+    const applyEpubHighlights = (targetRendition: Rendition) => {
+      annotationsRef.current.forEach((ann) => {
+        try {
+          targetRendition.annotations.remove(ann.locator, "highlight");
+        } catch {
+          // Ignore if not yet registered
+        }
+        try {
+          targetRendition.annotations.add(
+            "highlight",
+            ann.locator,
+            { id: ann.id },
+            undefined,
+            "aura-epub-highlight",
+            {
+              fill: HIGHLIGHT_HEX[ann.color],
+              "fill-opacity":
+                activeThemeRef.current === "night" ? "0.42" : "0.35",
+              "mix-blend-mode":
+                activeThemeRef.current === "night" ? "screen" : "multiply",
+            }
+          );
+        } catch {
+          // Ignore invalid CFI range
+        }
+      });
+    };
+
+    const captureEpubSelectionFromContents = (
+      contents: any,
+      fallbackCfi?: string,
+      mouseEvent?: MouseEvent
+    ): boolean => {
+      const win = contents?.window as Window | undefined;
+      const sel = win?.getSelection?.();
+      const range =
+        sel && !sel.isCollapsed && sel.rangeCount > 0
+          ? sel.getRangeAt(0)
+          : fallbackCfi
+          ? contents?.range?.(fallbackCfi)
+          : null;
+
+      const text = (sel?.toString() || range?.toString() || "").trim();
+      if (!text || !range) return false;
+
+      let cfiRange = fallbackCfi || "";
+      if (!cfiRange) {
+        try {
+          cfiRange = contents.cfiFromRange(range);
+        } catch {
+          cfiRange = currentLocatorRef.current || "";
+        }
+      }
+      if (!cfiRange) return false;
+
+      const containerRect =
+        epubContainerRef.current?.getBoundingClientRect() ?? {
+          left: 160,
+          top: 80,
+          right: window.innerWidth - 40,
+          bottom: window.innerHeight - 60,
+          width: window.innerWidth - 200,
+          height: window.innerHeight - 140,
+        };
+
+      const rect = range.getBoundingClientRect();
+      const iframeEl = contents?.document?.defaultView
+        ?.frameElement as HTMLElement | null;
+      const iframeRect = iframeEl?.getBoundingClientRect() ?? containerRect;
+
+      const rawX =
+        mouseEvent &&
+        typeof mouseEvent.clientX === "number" &&
+        mouseEvent.clientX > 0
+          ? iframeRect.left + mouseEvent.clientX
+          : iframeRect.left + rect.left + rect.width / 2;
+      const rawY =
+        mouseEvent &&
+        typeof mouseEvent.clientY === "number" &&
+        mouseEvent.clientY > 0
+          ? iframeRect.top + mouseEvent.clientY - 16
+          : iframeRect.top + rect.top - 14;
+
+      const minX = Math.max(210, containerRect.left + 140);
+      const maxX = Math.min(window.innerWidth - 210, containerRect.right - 140);
+      const clampedX = Math.max(minX, Math.min(maxX, rawX));
+
+      const minY = Math.max(76, containerRect.top + 42);
+      const maxY = Math.min(
+        window.innerHeight - 76,
+        containerRect.bottom - 42
+      );
+      const clampedY = Math.max(minY, Math.min(maxY, rawY));
+
+      setActiveSelection({
+        locator: cfiRange,
+        text,
+        pageNumber: currentVirtualPageRef.current,
+        popoverPosition: {
+          x: clampedX,
+          y: clampedY,
+        },
+      });
+      return true;
+    };
+
     rendition.hooks.content.register((contents: any) => {
       const doc: Document = contents.document;
       let styleEl = doc.getElementById(
@@ -391,6 +571,31 @@ export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
         doc.head.appendChild(styleEl);
       }
       styleEl.textContent = buildEpubContentStylesheet(activeThemeRef.current);
+
+      // Listen directly inside the EPUB iframe for text selection & right-click
+      doc.addEventListener("mouseup", (e: MouseEvent) => {
+        setTimeout(() => {
+          captureEpubSelectionFromContents(contents, undefined, e);
+        }, 25);
+      });
+
+      doc.addEventListener("contextmenu", (e: MouseEvent) => {
+        const hasSelection = captureEpubSelectionFromContents(
+          contents,
+          undefined,
+          e
+        );
+        if (hasSelection) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      });
+    });
+
+    rendition.on("rendered", () => {
+      if (!isDestroyed) {
+        applyEpubHighlights(rendition);
+      }
     });
 
     rendition.themes.fontSize(`${fontSizePct}%`);
@@ -480,27 +685,7 @@ export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
     });
 
     rendition.on("selected", (cfiRange: string, contents: any) => {
-      book.getRange(cfiRange).then((range) => {
-        const text = range?.toString().trim();
-        if (!text) return;
-
-        const rect = range.getBoundingClientRect();
-        const iframeRect =
-          contents.document.defaultView?.frameElement?.getBoundingClientRect() ?? {
-            left: 0,
-            top: 0,
-          };
-
-        setActiveSelection({
-          locator: cfiRange,
-          text,
-          pageNumber: currentVirtualPage,
-          popoverPosition: {
-            x: iframeRect.left + rect.left + rect.width / 2,
-            y: Math.max(64, iframeRect.top + rect.top - 12),
-          },
-        });
-      });
+      captureEpubSelectionFromContents(contents, cfiRange);
     });
 
     return () => {
@@ -538,24 +723,32 @@ export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
     if (!rendition || activeBook?.format !== "EPUB") return;
 
     annotations.forEach((ann) => {
-      rendition.annotations.remove(ann.locator, "highlight");
-      rendition.annotations.add(
-        "highlight",
-        ann.locator,
-        { id: ann.id },
-        undefined,
-        "aura-epub-highlight",
-        {
-          fill: HIGHLIGHT_HEX[ann.color],
-          "fill-opacity":
-            focusedItemId === ann.id
-              ? "0.68"
-              : themeMode === "night"
-              ? "0.42"
-              : "0.35",
-          "mix-blend-mode": themeMode === "night" ? "screen" : "multiply",
-        }
-      );
+      try {
+        rendition.annotations.remove(ann.locator, "highlight");
+      } catch {
+        // Ignore if not yet registered
+      }
+      try {
+        rendition.annotations.add(
+          "highlight",
+          ann.locator,
+          { id: ann.id },
+          undefined,
+          "aura-epub-highlight",
+          {
+            fill: HIGHLIGHT_HEX[ann.color],
+            "fill-opacity":
+              focusedItemId === ann.id
+                ? "0.68"
+                : themeMode === "night"
+                ? "0.42"
+                : "0.35",
+            "mix-blend-mode": themeMode === "night" ? "screen" : "multiply",
+          }
+        );
+      } catch {
+        // Ignore invalid CFI range
+      }
     });
   }, [annotations, activeBook?.format, themeMode, focusedItemId]);
 
@@ -970,7 +1163,8 @@ export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
                   </div>
 
                   {/* 2. Navigation / Flow Mode */}
-                  {activeBook.format === "EPUB" && (
+                  {(activeBook.format === "EPUB" ||
+                    activeBook.format === "MOBI") && (
                     <div>
                       <label className="mb-1.5 block text-[11px] font-semibold text-[var(--text-secondary)]">
                         Navigation Mode
@@ -1035,19 +1229,19 @@ export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
                   {/* 4. Font Size / PDF Zoom */}
                   <div>
                     <label className="mb-1.5 block text-[11px] font-semibold text-[var(--text-secondary)]">
-                      {activeBook.format === "EPUB"
-                        ? `Font Size (${fontSizePct}%)`
-                        : `PDF Zoom (${Math.round(pdfScale * 100)}%)`}
+                      {activeBook.format === "PDF"
+                        ? `PDF Zoom (${Math.round(pdfScale * 100)}%)`
+                        : `Font Size (${fontSizePct}%)`}
                     </label>
                     <div className="flex items-center justify-between gap-2 rounded-xl bg-[var(--bg-elevated)] p-1">
                       <button
                         onClick={() => {
-                          if (activeBook.format === "EPUB") {
-                            setFontSizePct(Math.max(75, fontSizePct - 10));
-                          } else {
+                          if (activeBook.format === "PDF") {
                             setPdfScale(
                               Math.max(0.8, Number((pdfScale - 0.15).toFixed(2)))
                             );
+                          } else {
+                            setFontSizePct(Math.max(75, fontSizePct - 10));
                           }
                         }}
                         className="flex-1 rounded-lg py-1 text-xs font-bold hover:bg-[var(--bg-card)]"
@@ -1055,18 +1249,18 @@ export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
                         A−
                       </button>
                       <span className="px-2 text-xs font-semibold">
-                        {activeBook.format === "EPUB"
-                          ? `${fontSizePct}%`
-                          : `${Math.round(pdfScale * 100)}%`}
+                        {activeBook.format === "PDF"
+                          ? `${Math.round(pdfScale * 100)}%`
+                          : `${fontSizePct}%`}
                       </span>
                       <button
                         onClick={() => {
-                          if (activeBook.format === "EPUB") {
-                            setFontSizePct(Math.min(175, fontSizePct + 10));
-                          } else {
+                          if (activeBook.format === "PDF") {
                             setPdfScale(
                               Math.min(2.5, Number((pdfScale + 0.15).toFixed(2)))
                             );
+                          } else {
+                            setFontSizePct(Math.min(175, fontSizePct + 10));
                           }
                         }}
                         className="flex-1 rounded-lg py-1 text-xs font-bold hover:bg-[var(--bg-card)]"
@@ -1111,7 +1305,7 @@ export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
           </div>
         </header>
 
-        {/* Floating Selection Popover for Instant EPUB & PDF Highlighting */}
+        {/* Floating Selection Popover for Instant EPUB, PDF & MOBI Highlighting */}
         {activeSelection && (
           <div
             style={
@@ -1122,38 +1316,107 @@ export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
                   }
                 : undefined
             }
-            className="fixed z-50 flex -translate-x-1/2 -translate-y-full items-center gap-2 rounded-xl border border-[var(--border-color)] bg-[var(--bg-card)] p-2 shadow-2xl"
+            className="fixed z-50 flex -translate-x-1/2 -translate-y-full items-center gap-2 rounded-2xl border border-[var(--border-color)] bg-[var(--bg-card)] px-3 py-2 shadow-2xl"
           >
-            {(["amber", "emerald", "sky", "rose"] as HighlightColor[]).map(
-              (color) => (
-                <button
-                  key={color}
-                  title={`Save ${color} highlight`}
-                  onClick={() =>
-                    createOrUpdateAnnotation(
-                      activeSelection.locator,
-                      activeSelection.text,
-                      color,
-                      noteDraft || undefined,
-                      activeSelection.pageNumber,
-                      activeSelection.rects
-                    ).then(() => setNoteDraft(""))
-                  }
-                  className="h-6 w-6 rounded-full border border-white/20 transition-transform hover:scale-110"
-                  style={{ backgroundColor: HIGHLIGHT_HEX[color] }}
-                />
-              )
-            )}
+            <div className="flex items-center gap-1.5">
+              {(["amber", "emerald", "sky", "rose"] as HighlightColor[]).map(
+                (color) => (
+                  <button
+                    key={color}
+                    title={`Highlight in ${color}`}
+                    onClick={() => {
+                      setSelectedHighlightColor(color);
+                      createOrUpdateAnnotation(
+                        activeSelection.locator,
+                        activeSelection.text,
+                        color,
+                        noteDraft || undefined,
+                        activeSelection.pageNumber,
+                        activeSelection.rects
+                      ).then(() => {
+                        setNoteDraft("");
+                        const contentsList =
+                          (renditionRef.current as any)?.getContents?.() ?? [];
+                        contentsList.forEach((c: any) =>
+                          c.window?.getSelection?.()?.removeAllRanges()
+                        );
+                      });
+                    }}
+                    className={`h-6 w-6 rounded-full border transition-transform hover:scale-110 ${
+                      selectedHighlightColor === color
+                        ? "scale-110 ring-2 ring-[var(--text-primary)]"
+                        : "border-white/25"
+                    }`}
+                    style={{ backgroundColor: HIGHLIGHT_HEX[color] }}
+                  />
+                )
+              )}
+            </div>
+
             <input
               type="text"
               value={noteDraft}
               onChange={(e) => setNoteDraft(e.target.value)}
-              placeholder="Add note to highlight..."
-              className="w-44 rounded border border-[var(--border-color)] bg-[var(--bg-elevated)] px-2 py-1 text-xs text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-none"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  createOrUpdateAnnotation(
+                    activeSelection.locator,
+                    activeSelection.text,
+                    selectedHighlightColor,
+                    noteDraft || undefined,
+                    activeSelection.pageNumber,
+                    activeSelection.rects
+                  ).then(() => {
+                    setNoteDraft("");
+                    const contentsList =
+                      (renditionRef.current as any)?.getContents?.() ?? [];
+                    contentsList.forEach((c: any) =>
+                      c.window?.getSelection?.()?.removeAllRanges()
+                    );
+                  });
+                }
+              }}
+              placeholder="Add note (optional)..."
+              className="w-40 rounded-lg border border-[var(--border-color)] bg-[var(--bg-elevated)] px-2.5 py-1 text-xs text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-none"
             />
+
+            <button
+              onClick={() => {
+                createOrUpdateAnnotation(
+                  activeSelection.locator,
+                  activeSelection.text,
+                  selectedHighlightColor,
+                  noteDraft || undefined,
+                  activeSelection.pageNumber,
+                  activeSelection.rects
+                ).then(() => {
+                  setNoteDraft("");
+                  const contentsList =
+                    (renditionRef.current as any)?.getContents?.() ?? [];
+                  contentsList.forEach((c: any) =>
+                    c.window?.getSelection?.()?.removeAllRanges()
+                  );
+                });
+              }}
+              className="rounded-lg bg-[var(--accent)] px-2.5 py-1 text-xs font-semibold text-slate-950 transition hover:bg-[var(--accent-hover)]"
+            >
+              Highlight
+            </button>
+
+            <button
+              title="Copy selected text"
+              onClick={() => {
+                navigator.clipboard?.writeText(activeSelection.text);
+                setActiveSelection(null);
+              }}
+              className="rounded-lg border border-[var(--border-color)] bg-[var(--bg-elevated)] px-2 py-1 text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+            >
+              Copy
+            </button>
+
             <button
               onClick={() => setActiveSelection(null)}
-              className="px-1.5 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+              className="px-1 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
             >
               ✕
             </button>
@@ -1184,10 +1447,65 @@ export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
                 pageSpread === "single" ? "max-w-3xl" : "max-w-5xl"
               } overflow-hidden rounded-xl border border-[var(--border-color)] shadow-sm transition-colors duration-150`}
             />
+          ) : activeBook.format === "MOBI" ? (
+            <div
+              onContextMenu={(e) => {
+                if (window.getSelection()?.toString().trim()) {
+                  e.preventDefault();
+                }
+              }}
+              onMouseUp={() => {
+                const selection = window.getSelection();
+                if (!selection || selection.isCollapsed) return;
+                const text = selection.toString().trim();
+                if (!text) return;
+                const rect = selection.getRangeAt(0).getBoundingClientRect();
+                setActiveSelection({
+                  locator: `page:${currentVirtualPage}`,
+                  text,
+                  pageNumber: currentVirtualPage,
+                  popoverPosition: {
+                    x: Math.max(
+                      210,
+                      Math.min(window.innerWidth - 210, rect.left + rect.width / 2)
+                    ),
+                    y: Math.max(76, rect.top - 14),
+                  },
+                });
+              }}
+              style={{
+                backgroundColor: themePalette.bgCard,
+                fontSize: `${fontSizePct}%`,
+              }}
+              className="w-full max-w-3xl rounded-xl border border-[var(--border-color)] p-8 font-[family-name:var(--font-serif)] leading-relaxed shadow-sm"
+            >
+              {readingFlow === "scrolled" ? (
+                <div className="space-y-8">
+                  {mobiPages.map((htmlPage, idx) => (
+                    <article
+                      key={idx}
+                      className="border-b border-[var(--border-color)]/50 pb-6 last:border-none"
+                      dangerouslySetInnerHTML={{ __html: htmlPage }}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <article
+                  dangerouslySetInnerHTML={{
+                    __html: mobiPages[currentVirtualPage - 1] ?? "",
+                  }}
+                />
+              )}
+            </div>
           ) : (
             <div className="flex flex-col items-center gap-4">
               <div
                 ref={pdfPageWrapperRef}
+                onContextMenu={(e) => {
+                  if (window.getSelection()?.toString().trim()) {
+                    e.preventDefault();
+                  }
+                }}
                 onMouseUp={handlePdfMouseUp}
                 style={{ backgroundColor: themePalette.bgCard }}
                 className="relative select-text overflow-hidden rounded-lg border border-[var(--border-color)] shadow-xl"
@@ -1198,7 +1516,7 @@ export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
                   style={{
                     filter:
                       themeMode === "night" && pdfSmartInvert
-                        ? "invert(0.93) hue-rotate(180deg) contrast(1.02)"
+                        ? "invert(0.88) hue-rotate(180deg) contrast(0.96) brightness(0.96)"
                         : themeMode === "sepia"
                         ? "sepia(0.28) brightness(0.97)"
                         : "none",

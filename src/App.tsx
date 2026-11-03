@@ -5,6 +5,7 @@ import { ReaderProvider, useReader } from "./context/ReaderContext";
 import { ReaderWorkspace } from "./components/ReaderWorkspace";
 import { BookshelfView } from "./components/BookshelfView";
 import { CloudBackupSettings } from "./components/CloudBackupSettings";
+import { AboutModal } from "./components/AboutModal";
 import { useBookshelf } from "./hooks/useBookshelf";
 import { BookRecord } from "./types/reader";
 
@@ -12,18 +13,19 @@ const AuraReaderShell: React.FC = () => {
   const { activeBook, openBook } = useReader();
   const bookshelf = useBookshelf();
   const [activeView, setActiveView] = useState<
-    "bookshelf" | "reader" | "cloud"
+    "bookshelf" | "reader" | "settings"
   >("bookshelf");
   const [isLibrarySidebarOpen, setIsLibrarySidebarOpen] = useState(true);
+  const [isScanningFolder, setIsScanningFolder] = useState(false);
+  const [isAboutOpen, setIsAboutOpen] = useState(false);
 
   const handleSelectBook = async (book: BookRecord) => {
     await openBook(book);
     setActiveView("reader");
-    // Auto-collapse the left library rail when entering the reader so the book has full width
     setIsLibrarySidebarOpen(false);
   };
 
-  const handleSwitchView = (nextView: "bookshelf" | "reader" | "cloud") => {
+  const handleSwitchView = (nextView: "bookshelf" | "reader" | "settings") => {
     if (nextView === "bookshelf") {
       bookshelf.refreshLibrary();
       setIsLibrarySidebarOpen(true);
@@ -34,7 +36,12 @@ const AuraReaderShell: React.FC = () => {
   const handleImportFile = async () => {
     const selected = await open({
       multiple: false,
-      filters: [{ name: "E-Books & Documents", extensions: ["epub", "pdf"] }],
+      filters: [
+        {
+          name: "E-Books & Documents",
+          extensions: ["epub", "pdf", "mobi", "azw"],
+        },
+      ],
     });
     if (typeof selected === "string") {
       const savedBook = await invoke<BookRecord>("import_book_file", {
@@ -47,12 +54,21 @@ const AuraReaderShell: React.FC = () => {
     }
   };
 
-  const handleScanFolder = async () => {
+  const handleScanFolder = async (): Promise<number> => {
     const dir = await open({ directory: true, multiple: false });
     if (typeof dir === "string") {
-      await invoke<BookRecord[]>("scan_local_library", { directoryPath: dir });
-      await bookshelf.refreshLibrary();
+      setIsScanningFolder(true);
+      try {
+        const scanned = await invoke<BookRecord[]>("scan_local_library", {
+          directoryPath: dir,
+        });
+        await bookshelf.refreshLibrary();
+        return scanned.length;
+      } finally {
+        setIsScanningFolder(false);
+      }
     }
+    return 0;
   };
 
   return (
@@ -63,12 +79,14 @@ const AuraReaderShell: React.FC = () => {
           isLibrarySidebarOpen ? "w-60" : "w-14"
         } flex shrink-0 flex-col border-r border-[var(--border-color)] bg-[var(--bg-card)] transition-all duration-200`}
       >
+        {/* Brand Header */}
         <div className="flex h-13 items-center justify-between border-b border-[var(--border-color)] px-3.5">
           {isLibrarySidebarOpen && (
-            <div className="flex items-center gap-2">
-              <div
-                className="h-2.5 w-2.5 rounded-full bg-[var(--accent)]"
-                style={{ boxShadow: "0 0 8px var(--accent-glow)" }}
+            <div className="flex items-center gap-2.5">
+              <img
+                src="/app-icon.png"
+                alt="AuraReader Icon"
+                className="h-6 w-6 shrink-0 rounded-md object-contain drop-shadow-xs"
               />
               <span className="text-xs font-bold tracking-wider uppercase">
                 AuraReader
@@ -115,37 +133,17 @@ const AuraReaderShell: React.FC = () => {
               )}
             </button>
           )}
-
-          <button
-            onClick={() =>
-              handleSwitchView(activeView === "cloud" ? "bookshelf" : "cloud")
-            }
-            title="OneDrive Cloud Backup & Settings"
-            className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-xs font-semibold transition ${
-              activeView === "cloud"
-                ? "bg-[var(--accent)] text-slate-950 shadow-xs"
-                : "text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]"
-            }`}
-          >
-            <span>☁</span>
-            {isLibrarySidebarOpen && <span>Cloud Backup</span>}
-          </button>
         </div>
 
         {isLibrarySidebarOpen && (
           <>
-            <div className="grid grid-cols-2 gap-2 p-3">
+            {/* Single Full-Width + Open File Button */}
+            <div className="p-3">
               <button
                 onClick={handleImportFile}
-                className="rounded-lg bg-[var(--accent)] px-2.5 py-2 text-xs font-semibold text-slate-950 shadow-xs transition hover:bg-[var(--accent-hover)]"
+                className="w-full rounded-lg bg-[var(--accent)] px-3 py-2 text-xs font-semibold text-slate-950 shadow-xs transition hover:bg-[var(--accent-hover)]"
               >
-                + Open File
-              </button>
-              <button
-                onClick={handleScanFolder}
-                className="rounded-lg border border-[var(--border-color)] bg-[var(--bg-elevated)] px-2.5 py-2 text-xs font-medium text-[var(--text-primary)] transition hover:border-[var(--accent)]"
-              >
-                Scan Folder
+                + Open Book File
               </button>
             </div>
 
@@ -187,6 +185,36 @@ const AuraReaderShell: React.FC = () => {
             </div>
           </>
         )}
+
+        {/* Pinned Bottom Settings & About Buttons */}
+        <div className="mt-auto flex items-center gap-1.5 border-t border-[var(--border-color)] p-2.5">
+          <button
+            onClick={() =>
+              handleSwitchView(
+                activeView === "settings" ? "bookshelf" : "settings"
+              )
+            }
+            title="Settings, Folder Sync & Cloud Backup"
+            className={`flex flex-1 items-center justify-center gap-2 rounded-xl px-3 py-2 text-xs font-semibold transition ${
+              activeView === "settings"
+                ? "bg-[var(--accent)] text-slate-950 shadow-xs"
+                : "border border-[var(--border-color)] bg-[var(--bg-elevated)] text-[var(--text-primary)] hover:border-[var(--accent)]"
+            }`}
+          >
+            <span>⚙</span>
+            {isLibrarySidebarOpen && <span>Settings</span>}
+          </button>
+
+          {isLibrarySidebarOpen && (
+            <button
+              onClick={() => setIsAboutOpen(true)}
+              title="About AuraReader"
+              className="flex items-center justify-center rounded-xl border border-[var(--border-color)] bg-[var(--bg-elevated)] px-2.5 py-2 text-xs font-semibold text-[var(--text-primary)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+            >
+              ℹ
+            </button>
+          )}
+        </div>
       </aside>
 
       {/* Main Content Area */}
@@ -196,19 +224,32 @@ const AuraReaderShell: React.FC = () => {
             bookshelf={bookshelf}
             onSelectBook={handleSelectBook}
             onImportFile={handleImportFile}
-            onScanFolder={handleScanFolder}
+            onScanFolder={() => handleSwitchView("settings")}
           />
-        ) : activeView === "cloud" ? (
-          <div className="flex h-full items-center justify-center p-8">
-            <CloudBackupSettings />
+        ) : activeView === "settings" ? (
+          <div className="h-full overflow-y-auto p-6 sm:p-8">
+            <CloudBackupSettings
+              totalBooksCount={bookshelf.books.length}
+              scannedFolders={bookshelf.availableFolders}
+              isScanningFolder={isScanningFolder}
+              onScanLocalFolder={handleScanFolder}
+            />
           </div>
         ) : (
           <ReaderWorkspace
             onBackToLibrary={() => handleSwitchView("bookshelf")}
-            onOpenCloudSettings={() => handleSwitchView("cloud")}
+            onOpenCloudSettings={() => handleSwitchView("settings")}
           />
         )}
       </div>
+
+      <AboutModal
+        isOpen={isAboutOpen}
+        onClose={() => setIsAboutOpen(false)}
+        appName="AuraReader"
+        version="v0.1.0"
+        creatorName="FEMAG"
+      />
     </div>
   );
 };

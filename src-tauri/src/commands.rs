@@ -50,6 +50,13 @@ pub fn import_book_file(
 }
 
 #[tauri::command]
+pub fn load_mobi_book(file_path: String) -> Result<crate::mobi_engine::MobiDocumentPayload, String> {
+    let path = PathBuf::from(&file_path);
+    let safe = scanner::validate_local_path(&path).map_err(|e| e.to_string())?;
+    crate::mobi_engine::load_mobi_document(&safe)
+}
+
+#[tauri::command]
 pub fn scan_local_library(
     directory_path: String,
     state: State<'_, AppState>,

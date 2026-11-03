@@ -60,7 +60,7 @@ pub fn scan_directory(
         }
         if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
             match ext.to_ascii_lowercase().as_str() {
-                "epub" | "pdf" => {
+                "epub" | "pdf" | "mobi" | "azw" => {
                     if let Ok(record) = extract_book_metadata(path, covers_dir) {
                         discovered_books.push(record);
                     }
@@ -99,6 +99,7 @@ pub fn extract_book_metadata(
     match ext.as_str() {
         "epub" => extract_epub_metadata(&safe_path, folder_path, file_hash, fallback_title, covers_dir),
         "pdf" => extract_pdf_metadata(&safe_path, folder_path, file_hash, fallback_title),
+        "mobi" | "azw" => extract_mobi_metadata(&safe_path, folder_path, file_hash, fallback_title, covers_dir),
         _ => Err(ScannerError::UnsupportedFormat),
     }
 }
@@ -175,6 +176,43 @@ fn extract_pdf_metadata(
         publisher: None,
         page_count,
         cover_path: None,
+        is_favorite: false,
+        tags: Vec::new(),
+        progress_pct: 0.0,
+        added_at: Utc::now().to_rfc3339(),
+        last_opened_at: None,
+    })
+}
+
+fn extract_mobi_metadata(
+    path: &Path,
+    folder_path: String,
+    file_hash: String,
+    fallback_title: String,
+    covers_dir: &Path,
+) -> Result<BookRecord, ScannerError> {
+    let summary = crate::mobi_engine::extract_mobi_summary(path, &file_hash, covers_dir).ok();
+
+    let title = summary
+        .as_ref()
+        .and_then(|s| s.title.clone())
+        .unwrap_or(fallback_title);
+    let author = summary.as_ref().and_then(|s| s.author.clone());
+    let publisher = summary.as_ref().and_then(|s| s.publisher.clone());
+    let page_count = summary.as_ref().and_then(|s| s.estimated_pages);
+    let cover_path = summary.and_then(|s| s.cover_path);
+
+    Ok(BookRecord {
+        id: Uuid::new_v4().to_string(),
+        file_hash,
+        file_path: path.to_string_lossy().to_string(),
+        folder_path,
+        format: "MOBI".to_string(),
+        title,
+        author,
+        publisher,
+        page_count,
+        cover_path,
         is_favorite: false,
         tags: Vec::new(),
         progress_pct: 0.0,

@@ -210,7 +210,7 @@ export const BookshelfView: React.FC<BookshelfViewProps> = ({
           <span>Favorites</span>
         </button>
 
-        {(["ALL", "EPUB", "PDF"] as Array<"ALL" | BookFormat>).map((fmt) => (
+        {(["ALL", "EPUB", "PDF", "MOBI"] as Array<"ALL" | BookFormat>).map((fmt) => (
           <button
             key={fmt}
             onClick={() => setSelectedFormat(fmt)}

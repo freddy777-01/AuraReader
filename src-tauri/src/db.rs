@@ -132,7 +132,7 @@ impl DatabaseManager {
                 file_hash TEXT NOT NULL UNIQUE,
                 file_path TEXT NOT NULL,
                 folder_path TEXT NOT NULL DEFAULT '',
-                format TEXT NOT NULL CHECK(format IN ('EPUB', 'PDF')),
+                format TEXT NOT NULL CHECK(format IN ('EPUB', 'PDF', 'MOBI')),
                 title TEXT NOT NULL,
                 author TEXT,
                 publisher TEXT,
@@ -205,6 +205,56 @@ impl DatabaseManager {
             "CREATE INDEX IF NOT EXISTS idx_books_author ON books(author)",
             [],
         );
+
+        // Upgrade existing `books` table CHECK constraint if it was created before MOBI support
+        let table_sql: Option<String> = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='books'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+
+        if let Some(sql_def) = table_sql {
+            if !sql_def.contains("'MOBI'") {
+                conn.pragma_update(None, "foreign_keys", "OFF")?;
+                conn.execute_batch(
+                    "
+                    BEGIN TRANSACTION;
+                    CREATE TABLE books_new (
+                        id TEXT PRIMARY KEY,
+                        file_hash TEXT NOT NULL UNIQUE,
+                        file_path TEXT NOT NULL,
+                        folder_path TEXT NOT NULL DEFAULT '',
+                        format TEXT NOT NULL CHECK(format IN ('EPUB', 'PDF', 'MOBI')),
+                        title TEXT NOT NULL,
+                        author TEXT,
+                        publisher TEXT,
+                        page_count INTEGER,
+                        cover_path TEXT,
+                        is_favorite INTEGER NOT NULL DEFAULT 0,
+                        tags_json TEXT NOT NULL DEFAULT '[]',
+                        added_at TEXT NOT NULL,
+                        last_opened_at TEXT
+                    );
+                    INSERT INTO books_new (
+                        id, file_hash, file_path, folder_path, format, title, author,
+                        publisher, page_count, cover_path, is_favorite, tags_json, added_at, last_opened_at
+                    )
+                    SELECT
+                        id, file_hash, file_path, folder_path, format, title, author,
+                        publisher, page_count, cover_path, is_favorite, tags_json, added_at, last_opened_at
+                    FROM books;
+                    DROP TABLE books;
+                    ALTER TABLE books_new RENAME TO books;
+                    CREATE INDEX IF NOT EXISTS idx_books_favorite ON books(is_favorite);
+                    CREATE INDEX IF NOT EXISTS idx_books_author ON books(author);
+                    COMMIT;
+                    ",
+                )?;
+                conn.pragma_update(None, "foreign_keys", "ON")?;
+            }
+        }
 
         Ok(())
     }

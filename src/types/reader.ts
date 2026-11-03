@@ -1,4 +1,18 @@
-export type BookFormat = "EPUB" | "PDF";
+export type BookFormat = "EPUB" | "PDF" | "MOBI";
+
+export interface MobiChapter {
+  index: number;
+  title: string;
+  startPage: number;
+}
+
+export interface MobiDocumentPayload {
+  title: string;
+  author?: string | null;
+  publisher?: string | null;
+  pages: string[];
+  chapters: MobiChapter[];
+}
 
 export type HighlightColor = "amber" | "emerald" | "sky" | "rose";
 
