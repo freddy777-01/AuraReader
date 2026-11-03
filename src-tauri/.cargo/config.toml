@@ -1,0 +1,9 @@
+[net]
+retry = 4
+git-fetch-with-cli = true
+
+[http]
+multiplexing = false
+check-revoke = false
+timeout = 60
+

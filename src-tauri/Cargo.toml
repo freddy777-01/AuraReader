@@ -1,0 +1,32 @@
+[package]
+name = "aura-reader"
+version = "0.1.0"
+description = "AuraReader by FEMAG - High-performance desktop EPUB & PDF reader"
+authors = ["FEMAG"]
+edition = "2021"
+
+[lib]
+name = "aura_reader_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2.12", features = ["protocol-asset"] }
+tauri-plugin-shell = "2.6"
+tauri-plugin-dialog = "2.8"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rusqlite = { version = "0.32", features = ["bundled", "backup"] }
+tokio = { version = "1.40", features = ["full"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"] }
+epub = "2.1"
+lopdf = "0.34"
+sha2 = "0.10"
+walkdir = "2.5"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.10", features = ["v4", "serde"] }
+oauth2 = "4.4"
+thiserror = "1.0"
+

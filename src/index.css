@@ -1,0 +1,65 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *, [data-theme="dark"], [data-theme="dark"] *));
+
+:root {
+  --bg-primary: #f8fafc;
+  --bg-card: #ffffff;
+  --bg-elevated: #f1f5f9;
+  --border-color: #e2e8f0;
+  --text-primary: #1e293b;
+  --text-secondary: #64748b;
+  --accent: #f59e0b;
+  --accent-hover: #d97706;
+  --accent-glow: rgba(245, 158, 11, 0.35);
+  --font-serif: 'Merriweather', Georgia, serif;
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+[data-theme='sepia'],
+.sepia {
+  --bg-primary: #f4ecd8;
+  --bg-card: #f8f1e4;
+  --bg-elevated: #eadfc8;
+  --border-color: #dccbb0;
+  --text-primary: #433422;
+  --text-secondary: #78644c;
+  --accent: #d97706;
+  --accent-hover: #b45309;
+  --accent-glow: rgba(217, 119, 6, 0.35);
+}
+
+[data-theme='dark'],
+.dark {
+  --bg-primary: #090a0f;
+  --bg-card: #10131d;
+  --bg-elevated: #161a29;
+  --border-color: #1e2438;
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --accent: #f59e0b;
+  --accent-hover: #fbbf24;
+  --accent-glow: rgba(255, 183, 3, 0.4);
+}
+
+body {
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+}
+
+/* PDF.js selectable text layer positioning */
+.pdf-text-layer {
+  line-height: 1;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+}
+
+.pdf-text-layer span,
+.pdf-text-layer br {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+}
