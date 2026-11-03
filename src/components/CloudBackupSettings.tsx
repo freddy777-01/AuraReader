@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
+import { open as openInBrowser } from "@tauri-apps/plugin-shell";
 import {
   CloudBackupMetadata,
   CloudSyncPayload,
@@ -94,22 +95,70 @@ export const CloudBackupSettings: React.FC<CloudBackupSettingsProps> = ({
     }
   };
 
-  // 2. Check for App Updates via GitHub Releases
+  // 2. Check for App Updates via GitHub Releases API
   const handleCheckUpdates = async () => {
     setIsCheckingUpdate(true);
     setStatusBanner(null);
-    localStorage.setItem("aura_github_repo", githubRepo.trim());
+    const repo = githubRepo.trim() || "freddy777-01/AuraReader";
+    localStorage.setItem("aura_github_repo", repo);
     try {
-      const res = await invoke<UpdateCheckResult>("check_for_app_updates", {
-        githubRepo: githubRepo.trim(),
+      const currentVer = (sysInfo?.currentVersion ?? "1.0.0").replace(
+        /^v/i,
+        ""
+      );
+      const apiUrl = `https://api.github.com/repos/${repo}/releases/latest`;
+      const response = await fetch(apiUrl, {
+        headers: { Accept: "application/vnd.github+json" },
       });
-      setUpdateInfo(res);
-      setStatusBanner({
-        type: "success",
-        message: res.updateAvailable
-          ? `GitHub Release v${res.latestVersion} found — ${res.releaseNotes}`
-          : `AuraReader v${res.currentVersion} is up to date with ${githubRepo}.`,
-      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const latestVer = String(data.tag_name || currentVer).replace(
+          /^v/i,
+          ""
+        );
+        const assets: Array<{ name?: string; browser_download_url?: string }> =
+          Array.isArray(data.assets) ? data.assets : [];
+        const installerAsset = assets.find((a) => {
+          const n = (a.name || "").toLowerCase();
+          return n.endsWith("-setup.exe") || n.endsWith(".exe") || n.endsWith(".msi");
+        });
+        const downloadUrl =
+          installerAsset?.browser_download_url ||
+          data.html_url ||
+          `https://github.com/${repo}/releases/latest`;
+
+        const isNewer = latestVer !== currentVer;
+        const result: UpdateCheckResult = {
+          currentVersion: currentVer,
+          latestVersion: latestVer,
+          updateAvailable: isNewer,
+          releaseNotes:
+            data.name ||
+            data.body?.split("\n")?.[0] ||
+            `Release v${latestVer}`,
+          downloadUrl,
+        };
+        setUpdateInfo(result);
+        setStatusBanner({
+          type: "success",
+          message: result.updateAvailable
+            ? `Update Available: v${result.latestVersion} — ${result.releaseNotes}`
+            : `AuraReader v${result.currentVersion} is up to date with ${repo}.`,
+        });
+      } else {
+        // Fallback to Rust backend check
+        const res = await invoke<UpdateCheckResult>("check_for_app_updates", {
+          githubRepo: repo,
+        });
+        setUpdateInfo(res);
+        setStatusBanner({
+          type: "success",
+          message: res.updateAvailable
+            ? `Update Available: v${res.latestVersion} — ${res.releaseNotes}`
+            : `AuraReader v${res.currentVersion} is up to date with ${repo}.`,
+        });
+      }
     } catch (err) {
       setStatusBanner({ type: "error", message: String(err) });
     } finally {
@@ -640,7 +689,7 @@ export const CloudBackupSettings: React.FC<CloudBackupSettingsProps> = ({
                   Latest Release: v{updateInfo.latestVersion}{" "}
                   {updateInfo.updateAvailable ? (
                     <span className="ml-1.5 rounded bg-[var(--accent)]/20 px-1.5 py-0.5 text-[10px] text-[var(--accent)]">
-                      New Version Available
+                      Update Available
                     </span>
                   ) : (
                     <span className="ml-1.5 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] text-emerald-500">
@@ -653,35 +702,58 @@ export const CloudBackupSettings: React.FC<CloudBackupSettingsProps> = ({
                 </p>
               </div>
 
-              {updateInfo.updateAvailable && updateInfo.downloadUrl && (
-                <button
-                  disabled={isInstallingUpdate}
-                  onClick={async () => {
-                    setIsInstallingUpdate(true);
-                    setStatusBanner(null);
-                    try {
-                      const backupPath = await invoke<string>(
-                        "download_and_install_update",
-                        {
-                          downloadUrl: updateInfo.downloadUrl,
+              {updateInfo.updateAvailable && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={async () => {
+                      const targetUrl =
+                        updateInfo.downloadUrl ||
+                        `https://github.com/${githubRepo.trim()}/releases/latest`;
+                      try {
+                        await openInBrowser(targetUrl);
+                      } catch {
+                        window.open(targetUrl, "_blank");
+                      }
+                    }}
+                    className="rounded-xl bg-[var(--accent)] px-3.5 py-2 text-xs font-semibold text-slate-950 shadow-xs transition hover:bg-[var(--accent-hover)]"
+                  >
+                    Download & Upgrade
+                  </button>
+
+                  {updateInfo.downloadUrl && (
+                    <button
+                      disabled={isInstallingUpdate}
+                      onClick={async () => {
+                        setIsInstallingUpdate(true);
+                        setStatusBanner(null);
+                        try {
+                          const backupPath = await invoke<string>(
+                            "download_and_install_update",
+                            {
+                              downloadUrl: updateInfo.downloadUrl,
+                            }
+                          );
+                          setStatusBanner({
+                            type: "success",
+                            message: `Pre-update SQLite backup saved (${backupPath}) and installer launched.`,
+                          });
+                        } catch (err) {
+                          setStatusBanner({
+                            type: "error",
+                            message: String(err),
+                          });
+                        } finally {
+                          setIsInstallingUpdate(false);
                         }
-                      );
-                      setStatusBanner({
-                        type: "success",
-                        message: `Pre-update SQLite backup saved (${backupPath}) and installer launched.`,
-                      });
-                    } catch (err) {
-                      setStatusBanner({ type: "error", message: String(err) });
-                    } finally {
-                      setIsInstallingUpdate(false);
-                    }
-                  }}
-                  className="rounded-xl bg-emerald-600 px-3.5 py-2 text-xs font-semibold text-white shadow-xs hover:bg-emerald-500 disabled:opacity-50"
-                >
-                  {isInstallingUpdate
-                    ? "Backing Up & Downloading..."
-                    : "Download & Install Update"}
-                </button>
+                      }}
+                      className="rounded-xl bg-emerald-600 px-3.5 py-2 text-xs font-semibold text-white shadow-xs hover:bg-emerald-500 disabled:opacity-50"
+                    >
+                      {isInstallingUpdate
+                        ? "Backing Up & Downloading..."
+                        : "Auto-Backup & Install"}
+                    </button>
+                  )}
+                </div>
               )}
             </div>
           )}
@@ -693,7 +765,7 @@ export const CloudBackupSettings: React.FC<CloudBackupSettingsProps> = ({
         isOpen={isAboutModalOpen}
         onClose={() => setIsAboutModalOpen(false)}
         appName="AuraReader"
-        version={`v${sysInfo?.currentVersion ?? "0.1.0"}`}
+        version={`v${sysInfo?.currentVersion ?? "1.0.0"}`}
         creatorName="FEMAG"
       />
     </div>
