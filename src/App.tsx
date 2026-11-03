@@ -247,7 +247,7 @@ const AuraReaderShell: React.FC = () => {
         isOpen={isAboutOpen}
         onClose={() => setIsAboutOpen(false)}
         appName="AuraReader"
-        version="v1.0.0"
+        version="v1.0.1"
         creatorName="FEMAG"
       />
     </div>

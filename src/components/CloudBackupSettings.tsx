@@ -48,9 +48,7 @@ export const CloudBackupSettings: React.FC<CloudBackupSettingsProps> = ({
 
   const [authState, setAuthState] = useState<OneDriveAuthState | null>(null);
   const [sysInfo, setSysInfo] = useState<AppSystemInfo | null>(null);
-  const [githubRepo, setGithubRepo] = useState<string>(() => {
-    return localStorage.getItem("aura_github_repo") || "freddy777-01/AuraReader";
-  });
+  const OFFICIAL_GITHUB_REPO = "freddy777-01/AuraReader";
   const [updateInfo, setUpdateInfo] = useState<UpdateCheckResult | null>(null);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
   const [isInstallingUpdate, setIsInstallingUpdate] = useState(false);
@@ -99,8 +97,7 @@ export const CloudBackupSettings: React.FC<CloudBackupSettingsProps> = ({
   const handleCheckUpdates = async () => {
     setIsCheckingUpdate(true);
     setStatusBanner(null);
-    const repo = githubRepo.trim() || "freddy777-01/AuraReader";
-    localStorage.setItem("aura_github_repo", repo);
+    const repo = OFFICIAL_GITHUB_REPO;
     try {
       const currentVer = (sysInfo?.currentVersion ?? "1.0.0").replace(
         /^v/i,
@@ -143,8 +140,8 @@ export const CloudBackupSettings: React.FC<CloudBackupSettingsProps> = ({
         setStatusBanner({
           type: "success",
           message: result.updateAvailable
-            ? `Update Available: v${result.latestVersion} — ${result.releaseNotes}`
-            : `AuraReader v${result.currentVersion} is up to date with ${repo}.`,
+            ? `Update Available: AuraReader v${result.latestVersion} is ready to download.`
+            : `AuraReader v${result.currentVersion} is up to date.`,
         });
       } else {
         // Fallback to Rust backend check
@@ -155,8 +152,8 @@ export const CloudBackupSettings: React.FC<CloudBackupSettingsProps> = ({
         setStatusBanner({
           type: "success",
           message: res.updateAvailable
-            ? `Update Available: v${res.latestVersion} — ${res.releaseNotes}`
-            : `AuraReader v${res.currentVersion} is up to date with ${repo}.`,
+            ? `Update Available: AuraReader v${res.latestVersion} is ready to download.`
+            : `AuraReader v${res.currentVersion} is up to date.`,
         });
       }
     } catch (err) {
@@ -640,7 +637,7 @@ export const CloudBackupSettings: React.FC<CloudBackupSettingsProps> = ({
       )}
 
       {/* ====================================================================
-          TAB 3: GITHUB RELEASES AUTO-UPDATER
+          TAB 3: APPLICATION UPDATES
          ==================================================================== */}
       {activeSection === "updates" && (
         <section className="rounded-2xl border border-[var(--border-color)] bg-[var(--bg-card)] p-6 shadow-xs">
@@ -648,38 +645,26 @@ export const CloudBackupSettings: React.FC<CloudBackupSettingsProps> = ({
             <div>
               <div className="flex items-center gap-2.5">
                 <h2 className="font-[family-name:var(--font-serif)] text-base font-semibold">
-                  GitHub Releases Auto-Updater
+                  Application Updates
                 </h2>
                 <span className="rounded-full bg-[var(--accent)]/15 px-2.5 py-0.5 text-xs font-bold text-[var(--accent)]">
                   v{sysInfo?.currentVersion ?? "1.0.0"}
                 </span>
               </div>
               <p className="mt-1 text-xs text-[var(--text-secondary)]">
-                Checks your GitHub repository's{" "}
-                <code className="rounded bg-[var(--bg-elevated)] px-1.5 py-0.5 text-[var(--accent)]">
-                  /releases/latest
-                </code>{" "}
-                for new Windows installers, backs up your SQLite library first,
-                and launches the update automatically.
+                Check for new versions of AuraReader. Your local SQLite library,
+                reading progress, and highlights are automatically preserved
+                when upgrading.
               </p>
             </div>
 
-            <div className="flex items-center gap-2">
-              <input
-                type="text"
-                value={githubRepo}
-                onChange={(e) => setGithubRepo(e.target.value)}
-                placeholder="owner/repo (e.g. FEMAG/AuraReader)"
-                className="w-48 rounded-xl border border-[var(--border-color)] bg-[var(--bg-elevated)] px-3 py-1.5 text-xs text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-none"
-              />
-              <button
-                disabled={isCheckingUpdate}
-                onClick={handleCheckUpdates}
-                className="rounded-xl bg-[var(--accent)] px-4 py-2 text-xs font-semibold text-slate-950 shadow-xs transition hover:bg-[var(--accent-hover)] disabled:opacity-50"
-              >
-                {isCheckingUpdate ? "Checking..." : "Check GitHub Releases"}
-              </button>
-            </div>
+            <button
+              disabled={isCheckingUpdate}
+              onClick={handleCheckUpdates}
+              className="rounded-xl bg-[var(--accent)] px-4 py-2 text-xs font-semibold text-slate-950 shadow-xs transition hover:bg-[var(--accent-hover)] disabled:opacity-50"
+            >
+              {isCheckingUpdate ? "Checking..." : "Check for Updates"}
+            </button>
           </div>
 
           {updateInfo && (
@@ -708,7 +693,7 @@ export const CloudBackupSettings: React.FC<CloudBackupSettingsProps> = ({
                     onClick={async () => {
                       const targetUrl =
                         updateInfo.downloadUrl ||
-                        `https://github.com/${githubRepo.trim()}/releases/latest`;
+                        `https://github.com/${OFFICIAL_GITHUB_REPO}/releases/latest`;
                       try {
                         await openInBrowser(targetUrl);
                       } catch {
