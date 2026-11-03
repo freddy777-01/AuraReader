@@ -6,3 +6,4 @@
     RMDir /r "$LOCALAPPDATA\io.femag.aurareader"
   keep_data:
 !macroend
+
