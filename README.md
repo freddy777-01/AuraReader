@@ -101,3 +101,4 @@ npm run tauri build
 <p align="center">
   <b>Powered by FEMAG</b> • Crafted with ❤️ for book lovers and curious minds worldwide
 </p>
+
