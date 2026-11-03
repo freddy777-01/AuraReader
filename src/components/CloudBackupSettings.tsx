@@ -602,7 +602,7 @@ export const CloudBackupSettings: React.FC<CloudBackupSettingsProps> = ({
                   GitHub Releases Auto-Updater
                 </h2>
                 <span className="rounded-full bg-[var(--accent)]/15 px-2.5 py-0.5 text-xs font-bold text-[var(--accent)]">
-                  v{sysInfo?.currentVersion ?? "0.1.0"}
+                  v{sysInfo?.currentVersion ?? "1.0.0"}
                 </span>
               </div>
               <p className="mt-1 text-xs text-[var(--text-secondary)]">

@@ -71,7 +71,7 @@
   </a>
 </p>
 
-1. Download **`AuraReader_0.1.0_x64-setup.exe`** (or `.msi`) from the [Latest Release](https://github.com/freddy777-01/AuraReader/releases/latest) page.
+1. Download **`AuraReader_1.0.0_x64-setup.exe`** (or `.msi`) from the [Latest Release](https://github.com/freddy777-01/AuraReader/releases/latest) page.
 2. Run the installer and launch **AuraReader**.
 3. Open a book file or scan your local book folders in **Settings** and enjoy reading!
 

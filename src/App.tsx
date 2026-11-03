@@ -143,7 +143,7 @@ const AuraReaderShell: React.FC = () => {
                 onClick={handleImportFile}
                 className="w-full rounded-lg bg-[var(--accent)] px-3 py-2 text-xs font-semibold text-slate-950 shadow-xs transition hover:bg-[var(--accent-hover)]"
               >
-                + Open Book File
+                + Open File
               </button>
             </div>
 
@@ -247,7 +247,7 @@ const AuraReaderShell: React.FC = () => {
         isOpen={isAboutOpen}
         onClose={() => setIsAboutOpen(false)}
         appName="AuraReader"
-        version="v0.1.0"
+        version="v1.0.0"
         creatorName="FEMAG"
       />
     </div>
