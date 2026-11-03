@@ -48,7 +48,7 @@ export const CloudBackupSettings: React.FC<CloudBackupSettingsProps> = ({
   const [authState, setAuthState] = useState<OneDriveAuthState | null>(null);
   const [sysInfo, setSysInfo] = useState<AppSystemInfo | null>(null);
   const [githubRepo, setGithubRepo] = useState<string>(() => {
-    return localStorage.getItem("aura_github_repo") || "FEMAG/AuraReader";
+    return localStorage.getItem("aura_github_repo") || "freddy777-01/AuraReader";
   });
   const [updateInfo, setUpdateInfo] = useState<UpdateCheckResult | null>(null);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
