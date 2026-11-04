@@ -1856,8 +1856,7 @@ export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
               <div className="space-y-2.5">
                 {annotations.length === 0 ? (
                   <p className="p-2 text-xs text-[var(--text-secondary)]">
-                    Select any text in the EPUB or PDF to save a persistent
-                    SQLite highlight.
+                    Select any text in the document to save a highlight or note.
                   </p>
                 ) : (
                   annotations.map((ann) => (

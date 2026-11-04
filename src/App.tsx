@@ -10,7 +10,6 @@ import { useBookshelf } from "./hooks/useBookshelf";
 import { BookRecord } from "./types/reader";
 
 const QUICK_HISTORY_STORAGE_KEY = "aura_recent_quick_files";
-const OPENED_LIB_STORAGE_KEY = "aura_opened_library_timestamps";
 
 function normalizeFilePath(p: string): string {
   return p.replace(/^\\\\\?\\/, "").replace(/\\/g, "/").toLowerCase();
@@ -26,7 +25,7 @@ const AuraReaderShell: React.FC = () => {
   const [isScanningFolder, setIsScanningFolder] = useState(false);
   const [isAboutOpen, setIsAboutOpen] = useState(false);
 
-  // Persistent history of Quick-Opened files (not in Library)
+  // Persistent history of Quick-Opened files (not saved to Library)
   const [recentQuickFiles, setRecentQuickFiles] = useState<BookRecord[]>(() => {
     try {
       const raw = localStorage.getItem(QUICK_HISTORY_STORAGE_KEY);
@@ -36,36 +35,12 @@ const AuraReaderShell: React.FC = () => {
     }
   });
 
-  // Track explicit open timestamps for Library books
-  const [openedLibTimestamps, setOpenedLibTimestamps] = useState<
-    Record<string, string>
-  >(() => {
-    try {
-      const raw = localStorage.getItem(OPENED_LIB_STORAGE_KEY);
-      return raw ? (JSON.parse(raw) as Record<string, string>) : {};
-    } catch {
-      return {};
-    }
-  });
-
   useEffect(() => {
     localStorage.setItem(
       QUICK_HISTORY_STORAGE_KEY,
       JSON.stringify(recentQuickFiles)
     );
   }, [recentQuickFiles]);
-
-  useEffect(() => {
-    localStorage.setItem(
-      OPENED_LIB_STORAGE_KEY,
-      JSON.stringify(openedLibTimestamps)
-    );
-  }, [openedLibTimestamps]);
-
-  const recordLibraryBookOpened = (bookId: string) => {
-    const now = new Date().toISOString();
-    setOpenedLibTimestamps((prev) => ({ ...prev, [bookId]: now }));
-  };
 
   const handleSelectBook = async (book: BookRecord) => {
     if (book.isTemporary) {
@@ -81,7 +56,6 @@ const AuraReaderShell: React.FC = () => {
       ]);
       await openBook(updatedTemp);
     } else {
-      recordLibraryBookOpened(book.id);
       await openBook(book);
     }
     setActiveView("reader");
@@ -114,7 +88,6 @@ const AuraReaderShell: React.FC = () => {
       );
 
       if (existingBook) {
-        recordLibraryBookOpened(existingBook.id);
         await openBook(existingBook);
       } else {
         const ext = selected.split(".").pop()?.toLowerCase() || "pdf";
@@ -161,7 +134,7 @@ const AuraReaderShell: React.FC = () => {
     }
   };
 
-  // "+ Add Book" on Bookshelf -> Directly imports into permanent SQLite Library
+  // "+ Add Book" on Bookshelf -> Directly imports into permanent Library
   const handleAddBookToLibrary = async () => {
     const selected = await open({
       multiple: false,
@@ -180,7 +153,6 @@ const AuraReaderShell: React.FC = () => {
       setRecentQuickFiles((prev) =>
         prev.filter((item) => normalizeFilePath(item.filePath) !== normSelected)
       );
-      recordLibraryBookOpened(savedBook.id);
       await bookshelf.refreshLibrary();
       await openBook(savedBook);
       setActiveView("reader");
@@ -201,7 +173,6 @@ const AuraReaderShell: React.FC = () => {
 
   const handleClearRecentHistory = () => {
     setRecentQuickFiles([]);
-    setOpenedLibTimestamps({});
   };
 
   const handleScanFolder = async (): Promise<number> => {
@@ -221,42 +192,24 @@ const AuraReaderShell: React.FC = () => {
     return 0;
   };
 
-  // Combine recently opened Library books + Quick-Opened files, sorted by last opened time
+  // Only show temporary Quick-Opened files that are NOT saved in the Library
   const recentlyOpenedItems = useMemo(() => {
     const libPathSet = new Set(
       bookshelf.books.map((b) => normalizeFilePath(b.filePath))
     );
 
-    const openedLibraryBooks: BookRecord[] = bookshelf.books
-      .filter(
-        (b) =>
-          Boolean(b.lastOpenedAt) ||
-          (b.progressPct ?? 0) > 0 ||
-          Boolean(openedLibTimestamps[b.id])
-      )
-      .map((b) => ({
-        ...b,
-        isTemporary: false,
-        lastOpenedAt:
-          openedLibTimestamps[b.id] &&
-          (!b.lastOpenedAt || openedLibTimestamps[b.id] > b.lastOpenedAt)
-            ? openedLibTimestamps[b.id]
-            : b.lastOpenedAt || b.addedAt,
-      }));
-
-    const validQuickFiles: BookRecord[] = recentQuickFiles
+    return recentQuickFiles
       .filter((q) => !libPathSet.has(normalizeFilePath(q.filePath)))
       .map((q) => ({
         ...q,
         isTemporary: true,
-      }));
-
-    return [...openedLibraryBooks, ...validQuickFiles].sort((a, b) => {
-      const timeA = a.lastOpenedAt || a.addedAt || "";
-      const timeB = b.lastOpenedAt || b.addedAt || "";
-      return timeB.localeCompare(timeA);
-    });
-  }, [bookshelf.books, recentQuickFiles, openedLibTimestamps]);
+      }))
+      .sort((a, b) => {
+        const timeA = a.lastOpenedAt || a.addedAt || "";
+        const timeB = b.lastOpenedAt || b.addedAt || "";
+        return timeB.localeCompare(timeA);
+      });
+  }, [bookshelf.books, recentQuickFiles]);
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-[var(--bg-primary)] text-[var(--text-primary)]">
@@ -267,26 +220,44 @@ const AuraReaderShell: React.FC = () => {
         } flex shrink-0 flex-col border-r border-[var(--border-color)] bg-[var(--bg-card)] transition-all duration-200`}
       >
         {/* Brand Header */}
-        <div className="flex h-13 items-center justify-between border-b border-[var(--border-color)] px-3.5">
-          {isLibrarySidebarOpen && (
-            <div className="flex items-center gap-2.5">
+        <div
+          className={`flex h-13 items-center border-b border-[var(--border-color)] ${
+            isLibrarySidebarOpen ? "justify-between px-3.5" : "justify-center px-2"
+          }`}
+        >
+          {isLibrarySidebarOpen ? (
+            <>
+              <div className="flex items-center gap-2.5">
+                <img
+                  src="/app-icon.png"
+                  alt="AuraReader Icon"
+                  className="h-6 w-6 shrink-0 rounded-md object-contain drop-shadow-xs"
+                />
+                <span className="text-xs font-bold tracking-wider uppercase">
+                  AuraReader
+                </span>
+              </div>
+              <button
+                onClick={() => setIsLibrarySidebarOpen(false)}
+                title="Minimize Sidebar"
+                className="rounded p-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]"
+              >
+                ◀
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={() => setIsLibrarySidebarOpen(true)}
+              title="Expand Sidebar"
+              className="flex items-center justify-center rounded-lg p-1.5 transition hover:bg-[var(--bg-elevated)]"
+            >
               <img
                 src="/app-icon.png"
                 alt="AuraReader Icon"
                 className="h-6 w-6 shrink-0 rounded-md object-contain drop-shadow-xs"
               />
-              <span className="text-xs font-bold tracking-wider uppercase">
-                AuraReader
-              </span>
-            </div>
+            </button>
           )}
-          <button
-            onClick={() => setIsLibrarySidebarOpen(!isLibrarySidebarOpen)}
-            title="Toggle Sidebar"
-            className="rounded p-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]"
-          >
-            {isLibrarySidebarOpen ? "◀" : "▶"}
-          </button>
         </div>
 
         {/* Primary View Navigation */}
@@ -334,97 +305,80 @@ const AuraReaderShell: React.FC = () => {
               </button>
             </div>
 
-            {/* Recently Opened Header + Clear History Action */}
-            <div className="flex items-center justify-between px-3 py-1">
-              <span className="text-[11px] font-semibold tracking-wider text-[var(--text-secondary)] uppercase">
-                Recently Opened ({recentlyOpenedItems.length})
-              </span>
-              {recentQuickFiles.length > 0 && (
-                <button
-                  onClick={handleClearRecentHistory}
-                  title="Clear quick-opened file history"
-                  className="text-[10px] font-semibold text-[var(--text-secondary)] transition hover:text-rose-500"
-                >
-                  Clear Quick
-                </button>
-              )}
-            </div>
-
-            {/* Recently Opened List (Differentiating Library vs Quick-Opened Files) */}
-            <div className="flex-1 space-y-1.5 overflow-y-auto p-2">
-              {recentlyOpenedItems.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-[var(--border-color)] p-4 text-center text-[11px] text-[var(--text-secondary)]">
-                  No recently opened files yet. Open a book from your Bookshelf
-                  or click <strong>+ Open File</strong> for quick viewing.
+            {/* Temporary / Quick-Opened Files List (Only files not saved in Library) */}
+            {recentlyOpenedItems.length > 0 ? (
+              <>
+                <div className="flex items-center justify-between px-3 py-1">
+                  <span className="text-[11px] font-semibold tracking-wider text-[var(--text-secondary)] uppercase">
+                    Temporary Files ({recentlyOpenedItems.length})
+                  </span>
+                  <button
+                    onClick={handleClearRecentHistory}
+                    title="Clear temporary file history"
+                    className="text-[10px] font-semibold text-[var(--text-secondary)] transition hover:text-rose-500"
+                  >
+                    Clear
+                  </button>
                 </div>
-              ) : (
-                recentlyOpenedItems.map((book) => {
-                  const isSelected =
-                    activeBook &&
-                    normalizeFilePath(activeBook.filePath) ===
-                      normalizeFilePath(book.filePath) &&
-                    activeView === "reader";
 
-                  return (
-                    <div
-                      key={book.id}
-                      onClick={() => handleSelectBook(book)}
-                      role="button"
-                      tabIndex={0}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          handleSelectBook(book);
-                        }
-                      }}
-                      className={`group flex w-full cursor-pointer flex-col items-start rounded-xl border px-3 py-2 text-left transition ${
-                        isSelected
-                          ? "border-[var(--accent)]/50 bg-[var(--accent)]/15 text-[var(--accent)]"
-                          : "border-transparent hover:border-[var(--border-color)] hover:bg-[var(--bg-elevated)]"
-                      }`}
-                    >
-                      <div className="flex w-full items-center justify-between gap-1.5">
-                        <span className="truncate text-xs font-semibold">
-                          {book.isFavorite ? "★ " : ""}
-                          {book.title}
-                        </span>
+                <div className="flex-1 space-y-1.5 overflow-y-auto p-2">
+                  {recentlyOpenedItems.map((book) => {
+                    const isSelected =
+                      activeBook &&
+                      normalizeFilePath(activeBook.filePath) ===
+                        normalizeFilePath(book.filePath) &&
+                      activeView === "reader";
 
-                        {book.isTemporary ? (
+                    return (
+                      <div
+                        key={book.id}
+                        onClick={() => handleSelectBook(book)}
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            handleSelectBook(book);
+                          }
+                        }}
+                        className={`group flex w-full cursor-pointer flex-col items-start rounded-xl border px-3 py-2 text-left transition ${
+                          isSelected
+                            ? "border-[var(--accent)]/50 bg-[var(--accent)]/15 text-[var(--accent)]"
+                            : "border-transparent hover:border-[var(--border-color)] hover:bg-[var(--bg-elevated)]"
+                        }`}
+                      >
+                        <div className="flex w-full items-center justify-between gap-1.5">
+                          <span className="truncate text-xs font-semibold">
+                            {book.title}
+                          </span>
+
                           <button
                             onClick={(e) =>
                               handleRemoveQuickHistoryItem(e, book.filePath)
                             }
-                            title="Remove from recent history"
+                            title="Remove from temporary files"
                             className="shrink-0 rounded px-1 py-0.5 text-[10px] text-[var(--text-secondary)] opacity-70 transition hover:bg-rose-500/15 hover:text-rose-500 group-hover:opacity-100"
                           >
                             ✕
                           </button>
-                        ) : (
-                          <span className="shrink-0 rounded bg-[var(--bg-elevated)] px-1.5 py-0.5 text-[10px] font-bold text-[var(--text-secondary)]">
-                            {Math.round(book.progressPct || 0)}%
+                        </div>
+
+                        <div className="mt-1 flex w-full items-center justify-between gap-2">
+                          <span className="truncate text-[10px] text-[var(--text-secondary)]">
+                            {book.author || book.format}
                           </span>
-                        )}
-                      </div>
 
-                      <div className="mt-1 flex w-full items-center justify-between gap-2">
-                        <span className="truncate text-[10px] text-[var(--text-secondary)]">
-                          {book.author || book.format}
-                        </span>
-
-                        {book.isTemporary ? (
                           <span className="shrink-0 rounded bg-sky-500/15 px-1.5 py-0.5 text-[9px] font-semibold text-sky-500">
-                            Quick File
+                            Temporary
                           </span>
-                        ) : (
-                          <span className="shrink-0 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-500">
-                            In Library
-                          </span>
-                        )}
+                        </div>
                       </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
+                    );
+                  })}
+                </div>
+              </>
+            ) : (
+              <div className="flex-1" />
+            )}
           </>
         )}
 
@@ -489,7 +443,6 @@ const AuraReaderShell: React.FC = () => {
                     (item) => normalizeFilePath(item.filePath) !== norm
                   )
                 );
-                recordLibraryBookOpened(savedBook.id);
               }
               bookshelf.refreshLibrary();
             }}
@@ -501,7 +454,7 @@ const AuraReaderShell: React.FC = () => {
         isOpen={isAboutOpen}
         onClose={() => setIsAboutOpen(false)}
         appName="AuraReader"
-        version="v1.0.2"
+        version="v1.0.3"
         creatorName="FEMAG"
       />
     </div>

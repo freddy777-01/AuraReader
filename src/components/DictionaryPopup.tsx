@@ -134,7 +134,7 @@ export const DictionaryPopup: React.FC<DictionaryPopupProps> = ({
         if (!navigator.onLine) {
           if (isCancelled) return;
           setErrorMsg(
-            `Offline mode: "${lookupWord}" is not stored in your local SQLite dictionary cache yet.`
+            `Offline mode: "${lookupWord}" is not saved in your offline dictionary yet.`
           );
           setIsLoading(false);
           return;
@@ -289,12 +289,12 @@ export const DictionaryPopup: React.FC<DictionaryPopupProps> = ({
             </span>
             {sourceType === "cache" && (
               <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-500">
-                ⚡ Offline Cache
+                ⚡ Offline
               </span>
             )}
             {sourceType === "online" && (
               <span className="rounded bg-sky-500/15 px-1.5 py-0.5 text-[9px] font-semibold text-sky-500">
-                🌐 Cached to SQLite
+                ✓ Saved Offline
               </span>
             )}
           </div>

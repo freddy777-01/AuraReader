@@ -163,23 +163,20 @@ export const CloudBackupSettings: React.FC<CloudBackupSettingsProps> = ({
     }
   };
 
-  // 3. Local SQLite Snapshot Export / Import & Factory Reset
+  // 3. Local Backup Export / Import & Factory Reset
   const handleExportLocalSnapshot = async () => {
     try {
       const target = await save({
-        defaultPath: "aurareader_backup.sqlite",
-        filters: [{ name: "SQLite Database", extensions: ["sqlite", "db"] }],
+        defaultPath: "aurareader_backup.db",
+        filters: [{ name: "AuraReader Backup", extensions: ["db", "backup"] }],
       });
       if (typeof target === "string") {
-        const savedPath = await invoke<string>(
-          "export_local_database_snapshot",
-          {
-            destinationPath: target,
-          }
-        );
+        await invoke<string>("export_local_database_snapshot", {
+          destinationPath: target,
+        });
         setStatusBanner({
           type: "success",
-          message: `Exported portable SQLite snapshot to ${savedPath}`,
+          message: "Library backup exported successfully.",
         });
       }
     } catch (err) {
@@ -191,7 +188,12 @@ export const CloudBackupSettings: React.FC<CloudBackupSettingsProps> = ({
     try {
       const selected = await open({
         multiple: false,
-        filters: [{ name: "SQLite Database", extensions: ["sqlite", "db"] }],
+        filters: [
+          {
+            name: "AuraReader Backup",
+            extensions: ["db", "backup", "sqlite"],
+          },
+        ],
       });
       if (typeof selected === "string") {
         const payload = await invoke<CloudSyncPayload>(
@@ -204,7 +206,7 @@ export const CloudBackupSettings: React.FC<CloudBackupSettingsProps> = ({
         refreshSystemMetadata();
         setStatusBanner({
           type: "success",
-          message: `Restored ${payload.books.length} books and ${payload.annotations.length} highlights from local snapshot.`,
+          message: `Restored ${payload.books.length} books and ${payload.annotations.length} highlights from backup.`,
         });
       }
     } catch (err) {
@@ -221,7 +223,7 @@ export const CloudBackupSettings: React.FC<CloudBackupSettingsProps> = ({
       setStatusBanner({
         type: "success",
         message:
-          "All local SQLite library records, highlights, bookmarks, and cached covers have been permanently deleted.",
+          "All local library records, highlights, bookmarks, and cached covers have been permanently deleted.",
       });
     } catch (err) {
       setStatusBanner({ type: "error", message: String(err) });
@@ -290,8 +292,8 @@ export const CloudBackupSettings: React.FC<CloudBackupSettingsProps> = ({
             Settings & Application Center
           </h1>
           <p className="mt-0.5 text-xs text-[var(--text-secondary)]">
-            Sync local book folders, manage OneDrive & SQLite backups, check
-            updates, and view app details.
+            Sync local book folders, manage backups, check updates, and view
+            app details.
           </p>
         </div>
 
@@ -435,20 +437,17 @@ export const CloudBackupSettings: React.FC<CloudBackupSettingsProps> = ({
             </div>
           </section>
 
-          {/* Data Retention, Portable Snapshot Export & Complete Wipe */}
+          {/* Data Retention, Backup Export & Complete Wipe */}
           <section className="rounded-2xl border border-[var(--border-color)] bg-[var(--bg-card)] p-6 shadow-xs">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <h2 className="font-[family-name:var(--font-serif)] text-base font-semibold">
-                  Data Retention & Uninstall Behavior
+                  Library Backup & Data Management
                 </h2>
                 <p className="mt-1 text-xs text-[var(--text-secondary)]">
-                  Your SQLite library, reading progress, highlights, and
-                  bookmarks are stored in{" "}
-                  <code className="rounded bg-[var(--bg-elevated)] px-1.5 py-0.5 text-[var(--accent)]">
-                    AppData\Roaming\io.femag.aurareader
-                  </code>{" "}
-                  so reinstalling or upgrading retains your library by default.
+                  Your library, reading progress, highlights, and bookmarks are
+                  saved locally on your device so reinstalling or upgrading
+                  retains your reading history by default.
                 </p>
               </div>
               <span className="shrink-0 rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs font-semibold text-emerald-500">
@@ -456,39 +455,18 @@ export const CloudBackupSettings: React.FC<CloudBackupSettingsProps> = ({
               </span>
             </div>
 
-            <div className="mt-4 space-y-2 rounded-xl border border-[var(--border-color)] bg-[var(--bg-elevated)] p-4 text-xs">
-              <div className="flex items-center justify-between">
-                <span className="font-medium text-[var(--text-secondary)]">
-                  SQLite Database Path:
-                </span>
-                <code className="max-w-md truncate text-[11px] text-[var(--text-primary)]">
-                  {sysInfo?.databasePath ?? "Loading..."}
-                </code>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="font-medium text-[var(--text-secondary)]">
-                  Database Size:
-                </span>
-                <span className="font-semibold">
-                  {sysInfo
-                    ? `${(sysInfo.databaseSizeBytes / 1024).toFixed(1)} KB`
-                    : "0 KB"}
-                </span>
-              </div>
-            </div>
-
-            <div className="mt-4 flex flex-wrap items-center gap-2.5">
+            <div className="mt-5 flex flex-wrap items-center gap-2.5">
               <button
                 onClick={handleExportLocalSnapshot}
                 className="rounded-xl bg-[var(--accent)] px-3.5 py-2 text-xs font-semibold text-slate-950 shadow-xs transition hover:bg-[var(--accent-hover)]"
               >
-                Export Local Backup (.sqlite)
+                Export Local Backup
               </button>
               <button
                 onClick={handleImportLocalSnapshot}
                 className="rounded-xl border border-[var(--border-color)] bg-[var(--bg-elevated)] px-3.5 py-2 text-xs font-semibold text-[var(--text-primary)] transition hover:border-[var(--accent)]"
               >
-                Import Local Backup (.sqlite)
+                Import Local Backup
               </button>
 
               {!confirmWipe ? (
@@ -533,12 +511,9 @@ export const CloudBackupSettings: React.FC<CloudBackupSettingsProps> = ({
                 Cloud Backup & Cross-Device Sync (Microsoft OneDrive)
               </h2>
               <p className="mt-1 text-xs text-[var(--text-secondary)]">
-                Securely exports an atomic SQLite snapshot and JSON highlight
-                payload to your isolated OneDrive{" "}
-                <code className="rounded bg-[var(--bg-elevated)] px-1.5 py-0.5 text-[var(--accent)]">
-                  Apps/AuraReader
-                </code>{" "}
-                folder via Microsoft Graph API.
+                Securely backs up your library, reading progress, highlights,
+                and bookmarks to your personal Microsoft OneDrive account so you
+                can restore them anytime.
               </p>
             </div>
 
@@ -582,8 +557,7 @@ export const CloudBackupSettings: React.FC<CloudBackupSettingsProps> = ({
             ) : (
               <div className="flex items-center justify-between gap-4">
                 <p className="text-[var(--text-secondary)]">
-                  Sign in with Microsoft OAuth 2.0 (PKCE) to enable cloud
-                  backup.
+                  Sign in with your Microsoft account to enable cloud backup.
                 </p>
                 <button
                   onClick={async () => {
@@ -652,9 +626,9 @@ export const CloudBackupSettings: React.FC<CloudBackupSettingsProps> = ({
                 </span>
               </div>
               <p className="mt-1 text-xs text-[var(--text-secondary)]">
-                Check for new versions of AuraReader. Your local SQLite library,
-                reading progress, and highlights are automatically preserved
-                when upgrading.
+                Check for new versions of AuraReader. Your library, reading
+                progress, and highlights are automatically preserved when
+                upgrading.
               </p>
             </div>
 
@@ -712,15 +686,13 @@ export const CloudBackupSettings: React.FC<CloudBackupSettingsProps> = ({
                         setIsInstallingUpdate(true);
                         setStatusBanner(null);
                         try {
-                          const backupPath = await invoke<string>(
-                            "download_and_install_update",
-                            {
-                              downloadUrl: updateInfo.downloadUrl,
-                            }
-                          );
+                          await invoke<string>("download_and_install_update", {
+                            downloadUrl: updateInfo.downloadUrl,
+                          });
                           setStatusBanner({
                             type: "success",
-                            message: `Pre-update SQLite backup saved (${backupPath}) and installer launched.`,
+                            message:
+                              "Pre-update backup saved and installer launched.",
                           });
                         } catch (err) {
                           setStatusBanner({
