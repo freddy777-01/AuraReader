@@ -1,6 +1,6 @@
 [package]
 name = "aura-reader"
-version = "1.0.4"
+version = "1.0.5"
 description = "AuraReader by FEMAG - High-performance desktop EPUB, PDF & MOBI reader"
 authors = ["FEMAG"]
 edition = "2021"
