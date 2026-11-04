@@ -74,3 +74,38 @@ body {
   display: none !important;
   height: 0 !important;
 }
+
+/* Smooth elastic page-turn stretch & loading animations */
+@keyframes aura-stretch-bar {
+  0% {
+    transform: scaleX(0.15);
+    opacity: 0.4;
+  }
+  60% {
+    transform: scaleX(1.02);
+    opacity: 1;
+  }
+  100% {
+    transform: scaleX(1);
+    opacity: 0.9;
+  }
+}
+
+@keyframes aura-pill-pop {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, 10px) scale(0.92);
+  }
+  100% {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+  }
+}
+
+.aura-stretch-bar-anim {
+  animation: aura-stretch-bar 320ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.aura-pill-pop-anim {
+  animation: aura-pill-pop 200ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}

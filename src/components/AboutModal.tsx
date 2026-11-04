@@ -12,7 +12,7 @@ export const AboutModal: React.FC<AboutModalProps> = ({
   isOpen,
   onClose,
   appName = 'AuraReader',
-  version = 'v1.0.3',
+  version = 'v1.0.4',
   creatorName = 'FEMAG',
 }) => {
   // Close on Escape key press

@@ -4,6 +4,7 @@ import * as pdfjsLib from "pdfjs-dist";
 import { TextLayer } from "pdfjs-dist";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { THEME_PALETTES, useReader } from "../context/ReaderContext";
 import { DictionaryPopup, extractLookupWord } from "./DictionaryPopup";
 import {
@@ -220,9 +221,27 @@ export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
   );
 
   // ==========================================================================
+  // Smooth Elastic Stretch & Page-Turn Loading State
+  // ==========================================================================
+  const [pageTurnTransition, setPageTurnTransition] = useState<{
+    dir: 1 | -1;
+    phase: "stretching" | "settling";
+    targetPage: number;
+  } | null>(null);
+  const pageTurnTimerRef = useRef<number | null>(null);
+  const settleTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (pageTurnTimerRef.current) window.clearTimeout(pageTurnTimerRef.current);
+      if (settleTimerRef.current) window.clearTimeout(settleTimerRef.current);
+    };
+  }, []);
+
+  // ==========================================================================
   // Unified Next / Prev Page & Direct Page / Percentage Jump Handlers
   // ==========================================================================
-  const handlePrevPage = useCallback(() => {
+  const executeRawPrevPage = useCallback(() => {
     if (!activeBook) return;
     if (activeBook.format === "EPUB" && renditionRef.current) {
       renditionRef.current.prev();
@@ -237,10 +256,21 @@ export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
         (prev / Math.max(1, totalVirtualPages)) * 100,
         prev
       );
+      if (activeBook.format === "PDF") {
+        pendingPdfScrollYRef.current = 0;
+      } else if (readingFlow === "paginated") {
+        viewportScrollRef.current?.scrollTo({ top: 0 });
+      }
     }
-  }, [activeBook, currentVirtualPage, totalVirtualPages, updateProgress]);
+  }, [
+    activeBook,
+    currentVirtualPage,
+    totalVirtualPages,
+    updateProgress,
+    readingFlow,
+  ]);
 
-  const handleNextPage = useCallback(() => {
+  const executeRawNextPage = useCallback(() => {
     if (!activeBook) return;
     if (activeBook.format === "EPUB" && renditionRef.current) {
       renditionRef.current.next();
@@ -255,8 +285,97 @@ export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
         (next / Math.max(1, totalVirtualPages)) * 100,
         next
       );
+      if (activeBook.format === "PDF") {
+        pendingPdfScrollYRef.current = 0;
+      } else if (readingFlow === "paginated") {
+        viewportScrollRef.current?.scrollTo({ top: 0 });
+      }
     }
-  }, [activeBook, currentVirtualPage, totalVirtualPages, updateProgress]);
+  }, [
+    activeBook,
+    currentVirtualPage,
+    totalVirtualPages,
+    updateProgress,
+    readingFlow,
+  ]);
+
+  /**
+   * Triggers a smooth elastic stretch + loading indicator before turning to the next/previous page.
+   */
+  const turnPage = useCallback(
+    (dir: 1 | -1, landAtEnd = false) => {
+      if (!activeBook) return;
+      const canMove =
+        activeBook.format === "EPUB"
+          ? dir > 0
+            ? currentVirtualPage < totalVirtualPages || totalVirtualPages <= 1
+            : currentVirtualPage > 1 || totalVirtualPages <= 1
+          : dir > 0
+          ? currentVirtualPage < totalVirtualPages
+          : currentVirtualPage > 1;
+
+      if (!canMove) return;
+
+      // Avoid stacking multiple transitions while already stretching
+      if (pageTurnTransition?.phase === "stretching") return;
+
+      if (pageTurnTimerRef.current) window.clearTimeout(pageTurnTimerRef.current);
+      if (settleTimerRef.current) window.clearTimeout(settleTimerRef.current);
+
+      const nextTargetPage =
+        dir > 0
+          ? Math.min(totalVirtualPages, currentVirtualPage + 1)
+          : Math.max(1, currentVirtualPage - 1);
+
+      setPageTurnTransition({
+        dir,
+        phase: "stretching",
+        targetPage: nextTargetPage,
+      });
+
+      pageTurnTimerRef.current = window.setTimeout(() => {
+        if (dir > 0) executeRawNextPage();
+        else executeRawPrevPage();
+
+        if (landAtEnd) {
+          if (activeBook.format === "PDF") {
+            pendingPdfScrollYRef.current = 100;
+          } else if (activeBook.format === "MOBI") {
+            requestAnimationFrame(() => {
+              const el = viewportScrollRef.current;
+              if (el) el.scrollTop = el.scrollHeight;
+            });
+          }
+        }
+
+        setPageTurnTransition({
+          dir,
+          phase: "settling",
+          targetPage: nextTargetPage,
+        });
+
+        settleTimerRef.current = window.setTimeout(() => {
+          setPageTurnTransition(null);
+        }, 210);
+      }, 310);
+    },
+    [
+      activeBook,
+      currentVirtualPage,
+      totalVirtualPages,
+      pageTurnTransition?.phase,
+      executeRawNextPage,
+      executeRawPrevPage,
+    ]
+  );
+
+  const handlePrevPage = useCallback(() => {
+    turnPage(-1, false);
+  }, [turnPage]);
+
+  const handleNextPage = useCallback(() => {
+    turnPage(1, false);
+  }, [turnPage]);
 
   const handleJumpToPageNumber = useCallback(
     (targetPage: number) => {
@@ -293,22 +412,261 @@ export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
     [activeBook, totalVirtualPages, updateProgress, virtualPages]
   );
 
-  // Global keyboard arrow navigation
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-      if (e.key === "ArrowLeft" || e.key === "PageUp") {
-        e.preventDefault();
-        handlePrevPage();
-      } else if (e.key === "ArrowRight" || e.key === "PageDown") {
-        e.preventDefault();
-        handleNextPage();
+  // ==========================================================================
+  // Keyboard Shortcuts & Mouse-Wheel Page Turning
+  // --------------------------------------------------------------------------
+  //  → / ←              Next / previous page (scroll first in Continuous Scroll)
+  //  Space / PageDown   Scroll one screen, then turn the page at the bottom
+  //  Shift+Space/PageUp Scroll back one screen, then previous page at the top
+  //  Home / End         First / last page
+  //  ↑ / ↓              Scroll within the current page, then stretch-turn at edge
+  //  B                  Toggle bookmark on the current page
+  //  D                  Look up the selected word in the dictionary
+  //  F                  Toggle fullscreen
+  //  Esc                Close popups / drawer, or exit fullscreen
+  // ==========================================================================
+  const lastWheelFlipRef = useRef<number>(0);
+  const wheelAccumRef = useRef<{ dir: number; amount: number; last: number }>({
+    dir: 0,
+    amount: 0,
+    last: 0,
+  });
+  const navHandlersRef = useRef<{
+    onKey: (e: KeyboardEvent) => void;
+    onWheel: (e: WheelEvent) => void;
+  }>({ onKey: () => {}, onWheel: () => {} });
+
+  /** The element that currently scrolls the reading surface (if any). */
+  const getReadingScrollEl = (): HTMLElement | null => {
+    if (activeBook?.format === "EPUB") {
+      // Check active EPUB iframe scrollingElement first, then .epub-container
+      const contentsList = (renditionRef.current as any)?.getContents?.() ?? [];
+      for (const c of contentsList) {
+        const docEl = c?.document?.scrollingElement as HTMLElement | undefined;
+        if (docEl && docEl.scrollHeight > docEl.clientHeight + 4) {
+          return docEl;
+        }
       }
+      const epubCont = epubContainerRef.current?.querySelector(
+        ".epub-container"
+      ) as HTMLElement | null;
+      if (epubCont) return epubCont;
+    }
+    return viewportScrollRef.current;
+  };
+
+  const getScrollState = () => {
+    const el = getReadingScrollEl();
+    const scrollable = !!el && el.scrollHeight > el.clientHeight + 4;
+    return {
+      el,
+      scrollable,
+      atStart: !scrollable || el!.scrollTop <= 4,
+      atEnd:
+        !scrollable || el!.scrollTop + el!.clientHeight >= el!.scrollHeight - 4,
     };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [handlePrevPage, handleNextPage]);
+  };
+
+  /** Space / PageDown behaviour: scroll one screen, then turn the page once the edge is reached. */
+  const smartPageStep = (dir: 1 | -1) => {
+    const { el, scrollable, atStart, atEnd } = getScrollState();
+    if (el && scrollable && (dir > 0 ? !atEnd : !atStart)) {
+      el.scrollBy({ top: dir * el.clientHeight * 0.88, behavior: "smooth" });
+      return;
+    }
+    if (activeBook?.format === "MOBI" && readingFlow === "scrolled") return;
+    turnPage(dir, dir < 0);
+  };
+
+  const toggleFullscreen = async () => {
+    try {
+      const win = getCurrentWindow();
+      await win.setFullscreen(!(await win.isFullscreen()));
+    } catch (err) {
+      console.error("Fullscreen toggle failed:", err);
+    }
+  };
+
+  const handleToggleBookmarkShortcut = () => {
+    if (!activeBook || !currentLocator) return;
+    const pct = Math.round(
+      progress?.percentage ||
+        (totalVirtualPages > 1
+          ? ((currentVirtualPage - 1) / (totalVirtualPages - 1)) * 100
+          : 0)
+    );
+    toggleCurrentBookmark({
+      locator: currentLocator,
+      pageNumber: currentVirtualPage,
+      label:
+        activeBook.format === "PDF"
+          ? `Page ${currentVirtualPage}`
+          : `Page ${currentVirtualPage} (${pct}%)`,
+    });
+  };
+
+  const handleReaderKeyDown = (e: KeyboardEvent) => {
+    if (!activeBook || e.defaultPrevented) return;
+    const target = e.target as HTMLElement | null;
+    const tag = target?.tagName;
+    const inputType = (target as HTMLInputElement | null)?.type;
+    const isTyping =
+      !!target &&
+      (tag === "TEXTAREA" ||
+        tag === "SELECT" ||
+        target.isContentEditable ||
+        (tag === "INPUT" && inputType !== "range" && inputType !== "checkbox"));
+
+    if (e.key === "Escape") {
+      if (showDictionaryPopup) setShowDictionaryPopup(false);
+      else if (activeSelection) setActiveSelection(null);
+      else if (showBookmarkPopover || showSettingsMenu) {
+        setShowBookmarkPopover(false);
+        setShowSettingsMenu(false);
+      } else if (isDrawerOpen) setIsDrawerOpen(false);
+      else {
+        const win = getCurrentWindow();
+        win
+          .isFullscreen()
+          .then((isFull) => {
+            if (isFull) return win.setFullscreen(false);
+          })
+          .catch(() => {});
+      }
+      if (isTyping) target?.blur();
+      return;
+    }
+
+    if (isTyping || e.ctrlKey || e.metaKey || e.altKey) return;
+
+    // PDFs are always page-by-page; EPUB/MOBI follow the chosen Navigation Mode
+    const isContinuous =
+      readingFlow === "scrolled" && activeBook.format !== "PDF";
+    let handled = true;
+
+    switch (e.key) {
+      case "ArrowRight":
+      case "ArrowLeft": {
+        if (e.shiftKey) {
+          handled = false; // Shift+Arrow is reserved for text selection
+          break;
+        }
+        const dir = e.key === "ArrowRight" ? 1 : -1;
+        if (isContinuous) smartPageStep(dir);
+        else turnPage(dir);
+        break;
+      }
+      case "PageDown":
+        smartPageStep(1);
+        break;
+      case "PageUp":
+        smartPageStep(-1);
+        break;
+      case " ":
+      case "Spacebar":
+        smartPageStep(e.shiftKey ? -1 : 1);
+        break;
+      case "Home":
+        handleJumpToPageNumber(1);
+        break;
+      case "End":
+        handleJumpToPageNumber(totalVirtualPages);
+        break;
+      case "ArrowDown":
+      case "ArrowUp": {
+        if (e.shiftKey) {
+          handled = false;
+          break;
+        }
+        const dir: 1 | -1 = e.key === "ArrowDown" ? 1 : -1;
+        const { el, scrollable, atStart, atEnd } = getScrollState();
+        if (el && scrollable && (dir > 0 ? !atEnd : !atStart)) {
+          el.scrollBy({
+            top: dir * 85,
+            behavior: "smooth",
+          });
+        } else if (
+          !(activeBook.format === "MOBI" && readingFlow === "scrolled")
+        ) {
+          // At the bottom/top edge of the page: stretch & transition to the next/previous page
+          turnPage(dir, dir < 0);
+        }
+        break;
+      }
+      default:
+        switch (e.key.toLowerCase()) {
+          case "b":
+            handleToggleBookmarkShortcut();
+            break;
+          case "d":
+            if (activeSelection) setShowDictionaryPopup((v) => !v);
+            else handled = false;
+            break;
+          case "f":
+            void toggleFullscreen();
+            break;
+          default:
+            handled = false;
+        }
+    }
+
+    if (handled) {
+      e.preventDefault();
+      // Release focus from buttons/sliders so Space/arrows don't also trigger them
+      if (tag === "BUTTON" || inputType === "range") target?.blur();
+    }
+  };
+
+  /** Mouse wheel: keep scrolling past the bottom (or top) of a page to turn it. */
+  const handleReaderWheel = (e: WheelEvent) => {
+    if (!activeBook || e.ctrlKey) return;
+    if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+    if (activeBook.format === "MOBI" && readingFlow === "scrolled") return;
+
+    const now = Date.now();
+    if (now - lastWheelFlipRef.current < 700) return; // cooldown after a turn
+
+    const dir: 1 | -1 = e.deltaY > 0 ? 1 : -1;
+    const { scrollable, atStart, atEnd } = getScrollState();
+    const acc = wheelAccumRef.current;
+    if (!(dir > 0 ? atEnd : atStart)) {
+      acc.amount = 0;
+      return;
+    }
+    if (acc.dir !== dir || now - acc.last > 450) acc.amount = 0;
+    acc.dir = dir;
+    acc.last = now;
+    acc.amount +=
+      Math.abs(e.deltaY) *
+      (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1);
+
+    // Require a deliberate extra push at the edge of scrollable pages
+    if (acc.amount < (scrollable ? 240 : 60)) return;
+    acc.amount = 0;
+    lastWheelFlipRef.current = now;
+    turnPage(dir, dir < 0 && scrollable);
+  };
+
+  navHandlersRef.current = {
+    onKey: handleReaderKeyDown,
+    onWheel: handleReaderWheel,
+  };
+
+  // App-level keyboard shortcuts (the EPUB frame forwards its own key presses too)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => navHandlersRef.current.onKey(e);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // Mouse-wheel page turning on the reading surface
+  useEffect(() => {
+    const main = viewportScrollRef.current;
+    if (!main) return;
+    const onWheel = (e: WheelEvent) => navHandlersRef.current.onWheel(e);
+    main.addEventListener("wheel", onWheel, { passive: true });
+    return () => main.removeEventListener("wheel", onWheel);
+  }, [activeBook?.id]);
 
   // ==========================================================================
   // Exact Sidebar Jump Navigation (Highlights, Bookmarks & TOC)
@@ -618,6 +976,16 @@ export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
           e.stopPropagation();
         }
       });
+
+      // Forward keyboard shortcuts & wheel page-turning from inside the EPUB frame
+      doc.addEventListener("keydown", (e: KeyboardEvent) =>
+        navHandlersRef.current.onKey(e)
+      );
+      doc.addEventListener(
+        "wheel",
+        (e: WheelEvent) => navHandlersRef.current.onWheel(e),
+        { passive: true }
+      );
     });
 
     rendition.on("rendered", () => {
@@ -704,12 +1072,6 @@ export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
       setTotalVirtualPages(totalLocs);
 
       updateProgress(cfi, Math.max(0, Math.min(100, pct || 0)));
-    });
-
-    // Enable keyboard arrow navigation inside the EPUB iframe
-    rendition.on("keyup", (e: KeyboardEvent) => {
-      if (e.key === "ArrowLeft") rendition.prev();
-      if (e.key === "ArrowRight") rendition.next();
     });
 
     rendition.on("selected", (cfiRange: string, contents: any) => {
@@ -1056,6 +1418,7 @@ export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
                     label: defaultLabel,
                   });
                 }}
+                title="Bookmark this page (B)"
                 className={`flex items-center gap-1 rounded-l-lg border px-2.5 py-1 text-xs font-medium transition ${
                   activeBookmark
                     ? "border-[var(--accent)] bg-[var(--accent)]/15 text-[var(--accent)]"
@@ -1334,7 +1697,41 @@ export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
                     </label>
                   )}
 
-                  {/* 6. Cloud Backup Shortcut */}
+                  {/* 6. Keyboard Shortcuts Reference */}
+                  <details className="group border-t border-[var(--border-color)] pt-3">
+                    <summary className="cursor-pointer list-none text-[11px] font-semibold text-[var(--text-secondary)] hover:text-[var(--text-primary)]">
+                      ⌨ Keyboard Shortcuts{" "}
+                      <span className="group-open:hidden">▸</span>
+                      <span className="hidden group-open:inline">▾</span>
+                    </summary>
+                    <div className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px]">
+                      {(
+                        [
+                          ["→  /  ←", "Next / previous page"],
+                          ["Space · PgDn", "Scroll down, then next page"],
+                          ["Shift+Space · PgUp", "Scroll up, then previous page"],
+                          ["Home / End", "First / last page"],
+                          ["↑ / ↓", "Scroll the page"],
+                          ["Mouse wheel", "Scroll past the edge to turn page"],
+                          ["B", "Bookmark this page"],
+                          ["D", "Define selected word"],
+                          ["F", "Fullscreen"],
+                          ["Esc", "Close popups / exit fullscreen"],
+                        ] as const
+                      ).map(([keys, label]) => (
+                        <React.Fragment key={keys}>
+                          <kbd className="rounded border border-[var(--border-color)] bg-[var(--bg-elevated)] px-1.5 py-0.5 text-center font-mono text-[10px] font-semibold whitespace-nowrap text-[var(--text-primary)]">
+                            {keys}
+                          </kbd>
+                          <span className="self-center text-[var(--text-secondary)]">
+                            {label}
+                          </span>
+                        </React.Fragment>
+                      ))}
+                    </div>
+                  </details>
+
+                  {/* 7. Cloud Backup Shortcut */}
                   {onOpenCloudSettings && (
                     <div className="border-t border-[var(--border-color)] pt-3">
                       <button
@@ -1453,7 +1850,7 @@ export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
             </button>
 
             <button
-              title="Look up word definition in Dictionary"
+              title="Look up word definition in Dictionary (D)"
               onClick={() => setShowDictionaryPopup(!showDictionaryPopup)}
               className={`rounded-lg border px-2 py-1 text-xs font-medium transition ${
                 showDictionaryPopup
@@ -1493,11 +1890,46 @@ export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
           />
         )}
 
-        {/* Document Reading Surface with Left/Right Edge Page-Turn Zones */}
+        {/* Document Reading Surface with Left/Right Edge Page-Turn Zones & Smooth Elastic Stretch */}
         <main
           ref={viewportScrollRef}
           className="relative flex flex-1 items-start justify-center overflow-auto px-10 py-4"
         >
+          {/* Floating Stretch Bar & Page-Turn Loading Indicator */}
+          {pageTurnTransition && (
+            <div
+              className={`pointer-events-none fixed left-1/2 z-40 flex -translate-x-1/2 flex-col items-center gap-2 transition-opacity duration-200 ${
+                pageTurnTransition.dir > 0 ? "bottom-14" : "top-16"
+              } ${
+                pageTurnTransition.phase === "settling"
+                  ? "opacity-0"
+                  : "opacity-100"
+              }`}
+            >
+              {pageTurnTransition.dir < 0 && (
+                <div className="aura-stretch-bar-anim h-1.5 w-64 rounded-full bg-gradient-to-r from-transparent via-[var(--accent)] to-transparent shadow-[0_0_16px_var(--accent-glow)]" />
+              )}
+
+              <div className="aura-pill-pop-anim flex items-center gap-2.5 rounded-full border border-[var(--accent)]/50 bg-[var(--bg-card)]/95 px-4 py-1.5 text-xs font-semibold text-[var(--text-primary)] shadow-2xl backdrop-blur-md">
+                <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[var(--accent)] border-t-transparent" />
+                <span>
+                  {pageTurnTransition.dir > 0
+                    ? "Moving to next page..."
+                    : "Moving to previous page..."}
+                </span>
+                {totalVirtualPages > 1 && (
+                  <span className="rounded-full bg-[var(--accent)]/20 px-2 py-0.5 text-[10px] font-bold text-[var(--accent)]">
+                    Page {pageTurnTransition.targetPage}
+                  </span>
+                )}
+              </div>
+
+              {pageTurnTransition.dir > 0 && (
+                <div className="aura-stretch-bar-anim h-1.5 w-64 rounded-full bg-gradient-to-r from-transparent via-[var(--accent)] to-transparent shadow-[0_0_16px_var(--accent-glow)]" />
+              )}
+            </div>
+          )}
+
           {/* Left Margin Click-to-Turn Zone */}
           {readingFlow === "paginated" && (
             <button
@@ -1512,10 +1944,34 @@ export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
           {activeBook.format === "EPUB" ? (
             <div
               ref={epubContainerRef}
-              style={{ backgroundColor: themePalette.bgCard }}
+              style={{
+                backgroundColor: themePalette.bgCard,
+                transformOrigin:
+                  pageTurnTransition?.dir && pageTurnTransition.dir < 0
+                    ? "top center"
+                    : "bottom center",
+                transform:
+                  pageTurnTransition?.phase === "stretching"
+                    ? pageTurnTransition.dir > 0
+                      ? "perspective(1100px) translateY(-14px) scaleY(1.032) scaleX(0.986)"
+                      : "perspective(1100px) translateY(14px) scaleY(1.032) scaleX(0.986)"
+                    : "perspective(1100px) translateY(0px) scaleY(1) scaleX(1)",
+                boxShadow:
+                  pageTurnTransition?.phase === "stretching"
+                    ? pageTurnTransition.dir > 0
+                      ? "0 18px 36px -8px var(--accent-glow)"
+                      : "0 -18px 36px -8px var(--accent-glow)"
+                    : undefined,
+                transition:
+                  "transform 290ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 290ms ease, background-color 150ms ease",
+              }}
               className={`h-full w-full ${
                 pageSpread === "single" ? "max-w-3xl" : "max-w-5xl"
-              } overflow-hidden rounded-xl border border-[var(--border-color)] shadow-sm transition-colors duration-150`}
+              } overflow-hidden rounded-xl border ${
+                pageTurnTransition?.phase === "stretching"
+                  ? "border-[var(--accent)]/60"
+                  : "border-[var(--border-color)]"
+              } shadow-sm`}
             />
           ) : activeBook.format === "MOBI" ? (
             <div
@@ -1546,8 +2002,30 @@ export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
               style={{
                 backgroundColor: themePalette.bgCard,
                 fontSize: `${fontSizePct}%`,
+                transformOrigin:
+                  pageTurnTransition?.dir && pageTurnTransition.dir < 0
+                    ? "top center"
+                    : "bottom center",
+                transform:
+                  pageTurnTransition?.phase === "stretching"
+                    ? pageTurnTransition.dir > 0
+                      ? "perspective(1100px) translateY(-14px) scaleY(1.032) scaleX(0.986)"
+                      : "perspective(1100px) translateY(14px) scaleY(1.032) scaleX(0.986)"
+                    : "perspective(1100px) translateY(0px) scaleY(1) scaleX(1)",
+                boxShadow:
+                  pageTurnTransition?.phase === "stretching"
+                    ? pageTurnTransition.dir > 0
+                      ? "0 18px 36px -8px var(--accent-glow)"
+                      : "0 -18px 36px -8px var(--accent-glow)"
+                    : undefined,
+                transition:
+                  "transform 290ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 290ms ease, background-color 150ms ease",
               }}
-              className="w-full max-w-3xl rounded-xl border border-[var(--border-color)] p-8 font-[family-name:var(--font-serif)] leading-relaxed shadow-sm"
+              className={`w-full max-w-3xl rounded-xl border ${
+                pageTurnTransition?.phase === "stretching"
+                  ? "border-[var(--accent)]/60"
+                  : "border-[var(--border-color)]"
+              } p-8 font-[family-name:var(--font-serif)] leading-relaxed shadow-sm`}
             >
               {readingFlow === "scrolled" ? (
                 <div className="space-y-8">
@@ -1577,8 +2055,32 @@ export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
                   }
                 }}
                 onMouseUp={handlePdfMouseUp}
-                style={{ backgroundColor: themePalette.bgCard }}
-                className="relative select-text overflow-hidden rounded-lg border border-[var(--border-color)] shadow-xl"
+                style={{
+                  backgroundColor: themePalette.bgCard,
+                  transformOrigin:
+                    pageTurnTransition?.dir && pageTurnTransition.dir < 0
+                      ? "top center"
+                      : "bottom center",
+                  transform:
+                    pageTurnTransition?.phase === "stretching"
+                      ? pageTurnTransition.dir > 0
+                        ? "perspective(1100px) translateY(-14px) scaleY(1.032) scaleX(0.986)"
+                        : "perspective(1100px) translateY(14px) scaleY(1.032) scaleX(0.986)"
+                      : "perspective(1100px) translateY(0px) scaleY(1) scaleX(1)",
+                  boxShadow:
+                    pageTurnTransition?.phase === "stretching"
+                      ? pageTurnTransition.dir > 0
+                        ? "0 18px 36px -8px var(--accent-glow)"
+                        : "0 -18px 36px -8px var(--accent-glow)"
+                      : undefined,
+                  transition:
+                    "transform 290ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 290ms ease, background-color 150ms ease",
+                }}
+                className={`relative select-text overflow-hidden rounded-lg border ${
+                  pageTurnTransition?.phase === "stretching"
+                    ? "border-[var(--accent)]/60"
+                    : "border-[var(--border-color)]"
+                } shadow-xl`}
               >
                 <canvas
                   ref={pdfCanvasRef}
@@ -1652,12 +2154,14 @@ export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
           <div className="flex shrink-0 items-center gap-1">
             <button
               onClick={handlePrevPage}
+              title="Previous page (← · PageUp · Shift+Space)"
               className="rounded-md border border-[var(--border-color)] bg-[var(--bg-elevated)] px-2.5 py-1 text-xs font-medium hover:border-[var(--accent)]"
             >
               ◀ Prev
             </button>
             <button
               onClick={handleNextPage}
+              title="Next page (→ · PageDown · Space)"
               className="rounded-md border border-[var(--border-color)] bg-[var(--bg-elevated)] px-2.5 py-1 text-xs font-medium hover:border-[var(--accent)]"
             >
               Next ▶
@@ -1672,6 +2176,8 @@ export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
               max={Math.max(1, totalVirtualPages)}
               value={currentVirtualPage}
               onChange={(e) => handleJumpToPageNumber(Number(e.target.value))}
+              onPointerUp={(e) => e.currentTarget.blur()}
+              title="Drag to jump (Home / End for first / last page)"
               className="h-1.5 flex-1 cursor-pointer appearance-none rounded-lg bg-[var(--bg-elevated)] accent-[var(--accent)]"
             />
             <span className="w-10 text-right font-semibold text-[var(--accent)]">
@@ -1687,6 +2193,8 @@ export const ReaderWorkspace: React.FC<ReaderWorkspaceProps> = ({
               if (!Number.isNaN(parsed)) {
                 handleJumpToPageNumber(parsed);
               }
+              // Return focus to the page so keyboard shortcuts work again
+              (document.activeElement as HTMLElement | null)?.blur();
             }}
             className="flex shrink-0 items-center gap-1.5 text-[11px] text-[var(--text-secondary)]"
           >
